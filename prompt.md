@@ -12,6 +12,7 @@ I want to work on a program which has two major components:
 2. Break down the work into tasks and keep track of them in this file
 3. it's okay to challenge what i tell you - i may be wrong. 
 4. always give me data backed decisions. point to evidence.
+5. keep track of the turn below.
 
 # Specifications
 ## Overall
@@ -36,6 +37,8 @@ I want to work on a program which has two major components:
 3. It should be able to infer a workout format from a site, generating a schema for the generator to consume. 
 
 OKAY TO EDIT BELOW THIS
+
+TURN: 
 
 # Plan
 
