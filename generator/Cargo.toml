@@ -1,0 +1,23 @@
+[package]
+name = "fit_generator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "fit_generator"
+path = "src/lib.rs"
+
+[[bin]]
+name = "2fit-gen"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+fit_core = { path = "../core" }
+rustyfit.workspace = true
+anyhow.workspace = true
+clap.workspace = true

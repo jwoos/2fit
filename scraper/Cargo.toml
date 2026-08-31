@@ -1,0 +1,22 @@
+[package]
+name = "fit_scraper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "fit_scraper"
+path = "src/lib.rs"
+
+[[bin]]
+name = "2fit-scrape"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+fit_core = { path = "../core" }
+anyhow.workspace = true
+clap.workspace = true
