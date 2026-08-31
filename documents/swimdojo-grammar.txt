@@ -1,0 +1,127 @@
+
+
+REMINDER: All of our workouts are based on the distance of a swim instead of the number of lengths or laps of a pool.  So instead of saying "4 lengths swim" or "2 lengths swim", we will say "100 swim". Pools in the US are generally 25 yards or 50 meters, so the number of lengths of the pool will depend on the type of pool in which you are swimming. 
+
+Please check out our Interval Training page and make sure you understand the basics of interval training, this page will make a lot more sense if you do.
+
+For any words you don't understand, refer to the Glossary.
+
+Basics
+
+For each workout you will be completing various distances repeated a certain number of times. It will be written out as: Number of Repetitions x Distance. For example, swimming distance of 100 yards four times through would be written as below:
+
+4 x 100
+
+The interval will be indicated by an @ sign. If we were to be doing these 100s with 20 seconds rest in between each 100, it would be written as:
+
+4 x 100 @ :20 rest
+
+If we were to do these 100s on 2 minutes, it would say:
+
+4 x 100 @ 2:00
+
+If no specific drill, kick, or stroke is specified, it is freestyle swim. 
+
+If we were going to follow up 100s with a set of two 200s on four minutes, the entire set would be written as:
+
+4 x 100 @ 2:00
+2 x 200 @ 4:00
+
+You should go directly from one part of the set into the next unless additional rest is indicated specifically. So in this case, don't take an extra break between the last 100 and the first 200.
+
+Sets
+
+Each workout will be broken up in to different sets. There is generally a Warm Up, followed by either one Main Set or a number of sets, and then a Warm Down. At the end of each set you will see an italic number. This number is the total distance for that set (just to save you from having to do the math yourself.) Example:
+
+Warm Up
+500 swim
+200 kick
+300 pull breathing 3/5/7 by 100
+1000
+
+Set 1
+8 x 50 @ b
+4 x 25 stroke @ :30
+500
+
+The italic numbers at the end of each set are the sum of that particular set, not the cumulative distance of the workout up to that point. This makes it easier to do the maths if you decide to shorten or lengthen the workout by skipping, adding, or modifying a set. 
+
+Bases
+
+Not all swims will be done exactly on your base. Some parts of the workout will be faster, others slower. For simplicity's sake, let's assume your 100s base is 2:00.
+
+4 x 100 on 2:00 would look like this:
+
+4 x 100 @ b
+
+If we wanted to push ourselves and do the 100s on 1:55 instead of 2:00, or 5 seconds faster than your base, it would be written as:
+
+4 x 100 @ b-5
+
+Let's say we wanted to make the base 2:15 instead of 2:00, or 15 seconds slower. It would be:
+
+4 x 100 @ b+15
+
+Bases for other distances
+
+If you can do a series of 100s in 2:00, we can assume you should be able to do a 200 in 4:00.  When a faster or slower base is listed, be sure to add or subtract from THE BASE OF THE LONGER DISTANCE. DO NOT take your 100 base, subtract that number, and multiply it out. 
+
+For example, if your 100 base is 2:00:
+
+200 @ b = 200 @ 4:00
+200 @ b -5 = 200 @ 3:55
+200 @ b+5 = 200 @ 4:05
+
+YES: Calculate 200 base, THEN subtract the five seconds
+NO: Subtract five seconds from your 100 base, then double that
+
+For help calculating your base for varying distances, refer to the Pacing Table.
+
+Repeats
+
+2x through:
+4 x 100 @ 2:00
+6 x 50 @ 1:00
+30 seconds rest
+
+This means that you will do the 4 x 100s immediately followed by the 6 x 50s, then take a 30 second break, and start the set again. If there is no indication of rest or an easy swim at the end of the repeated set, go directly back into the first part of the set.
+
+Easy swims
+
+2x through:
+4 x 100 @ b +5
+6 x 50 @ b
+50 easy
+
+The 50 easy is meant to be active recovery and is not on any sort of base. Go as slowly as you need to, but keep moving. Begin the next repetition once you feel your heart rate has dropped and you have recovered. If you need additional rest at the wall before that happens that is fine.
+
+Strokes
+
+As a rule, if you see "stroke" written on a workout it means anything other than freestyle (butterfly, backstroke, breaststroke, or IM). 
+
+IM
+IM stands for Individual Medley, and is swam in the following order:
+1. Butterfly / "Fly"
+2. Backstroke / "Back"
+3. Breaststroke / "Breast"
+4. Freestyle. / "Free"
+A 100 IM would be 25 of each stroke in that order. A 200 IM would be a 50 of each stroke in that order, a 300 is 75 of each stroke in that order, etc. You will often see 75s or 150s IM, there will be additional explanation as to how that should be broken down by stroke.
+
+Note that bases for strokes and IM can vary greatly from swimmer to swimmer. Don't be afraid to adjust the bases a little bit if you absolutely need to, making it faster or slower depending on your ability.
+
+Breathing Patterns
+
+If the workout says:
+
+300 @ 4:30, breathe 3/5/7/5/3 by 100
+
+For the first 100 breathe every 3 strokes, for the second 100 breathe every 5, for the third breathe every 7, etc. Goal should be not to breathe in or out of the turns.
+
+ ArticlesmehMay 15, 2018How To, Beginners
+
+ Facebook0
+
+ Twitter
+
+ 0 Likes
+
