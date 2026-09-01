@@ -414,6 +414,44 @@ pub struct RecoveryStep {
     pub stroke: Option<Stroke>,
 }
 
+/// A technique drill counted by reps rather than by swim distance or rest
+/// time, e.g. `3 x 10 bobs @ :30` (three sets of ten bobs, 30 s between
+/// sets).
+///
+/// The leading number of such a line is a rep count, not a pool distance —
+/// counting it would inflate the workout total (e.g. swimdojo's Sea Otter
+/// states `TOTAL: 800` for a warm-up containing `3 x 10 bobs`, which only
+/// holds if the bobs add 0 distance). Distance drills such as `200 kick`
+/// are *not* [`Step::Technique`]: there the number is a distance, so they
+/// parse as [`Step::Distance`].
+///
+/// Technique steps contribute [`Step::distance_value()`] = 0 and are
+/// skipped by [`Workout::flat_steps`] (v1 does not emit them as .fit
+/// workout steps).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TechniqueStep {
+    /// The drill or cue, e.g. "bobs".
+    pub drill: String,
+    /// Reps per set — the leading number (`10` in `3 x 10 bobs`).
+    pub reps_per_set: Option<u32>,
+    /// Number of sets — a leading `N x` prefix (`3` in `3 x 10 bobs`).
+    pub sets: Option<u32>,
+    /// Interval between sets, if stated (`@ :30`).
+    pub interval: Option<IntervalSpec>,
+    /// Free-form notes.
+    pub notes: Option<String>,
+}
+
+impl TechniqueStep {
+    /// Total reps across all sets (`sets * reps_per_set`, unknown factors
+    /// treated as 1).
+    pub fn total_reps(&self) -> u32 {
+        let sets = self.sets.unwrap_or(1);
+        let reps = self.reps_per_set.unwrap_or(1);
+        sets * reps
+    }
+}
+
 /// One line of a workout, in any format that can be mapped to the IDL.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -431,6 +469,8 @@ pub enum Step {
     },
     /// Active recovery swum off base, e.g. `50 easy`.
     Recovery(RecoveryStep),
+    /// A technique drill counted by reps, e.g. `3 x 10 bobs`.
+    Technique(TechniqueStep),
 }
 
 impl Step {
@@ -443,6 +483,7 @@ impl Step {
             Step::Breakdown(b) => b.parts.iter().map(|p| p.distance.value).sum(),
             Step::Rest { .. } => 0,
             Step::Recovery(r) => r.distance.value,
+            Step::Technique(_) => 0,
         }
     }
 
@@ -461,6 +502,7 @@ impl Step {
                     out.push_str(st.as_str());
                 }
                 if let Some(iv) = &s.interval {
+                    out.push(' ');
                     out.push_str(&iv.to_string());
                 }
                 out
@@ -489,6 +531,21 @@ impl Step {
             }
             Step::Rest { secs } => format!("{secs} rest"),
             Step::Recovery(r) => format!("{} easy", r.distance),
+            Step::Technique(t) => {
+                let mut out = String::new();
+                if let Some(sets) = t.sets {
+                    out.push_str(&format!("{sets} x "));
+                }
+                if let Some(reps) = t.reps_per_set {
+                    out.push_str(&format!("{reps} "));
+                }
+                out.push_str(&t.drill);
+                if let Some(iv) = &t.interval {
+                    out.push(' ');
+                    out.push_str(&iv.to_string());
+                }
+                out
+            }
         }
     }
 }
@@ -714,6 +771,9 @@ impl Workout {
                     intensity: Intensity::Recovery,
                 });
             }
+            // Technique drills (rep counted, not distance) are not emitted as
+            // .fit steps in v1 (see `TechniqueStep` docs).
+            Step::Technique(_) => {}
         }
     }
 
@@ -1026,6 +1086,50 @@ mod tests {
     }
 
     #[test]
+    fn technique_step_adds_no_distance_and_is_flattened_out() {
+        let mut w = Workout::new(Pool::yards25());
+        let bobs = TechniqueStep {
+            drill: "bobs".into(),
+            reps_per_set: Some(10),
+            sets: Some(3),
+            interval: Some(IntervalSpec::Fixed(Seconds::secs(30))),
+            notes: None,
+        };
+        assert_eq!(bobs.total_reps(), 30);
+        assert_eq!(Step::Technique(bobs.clone()).distance_value(), 0);
+        w.sections.push(Section {
+            label: SectionLabel::WarmUp,
+            steps: vec![
+                Step::Distance(DistanceStep {
+                    distance: Distance::yards(100),
+                    stroke: None,
+                    interval: None,
+                    intensity: Intensity::default(),
+                    notes: None,
+                }),
+                Step::Technique(bobs),
+            ],
+            subtotal: None,
+        });
+        // 100 swum; the 3 x 10 bobs add 0 distance and 0 flat steps.
+        assert_eq!(w.total_distance(), Distance::yards(100));
+        let flat = w.flat_steps();
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].distance, Some(Distance::yards(100)));
+        assert_eq!(
+            Step::Technique(TechniqueStep {
+                drill: "bobs".into(),
+                reps_per_set: Some(10),
+                sets: Some(3),
+                interval: Some(IntervalSpec::Fixed(Seconds::secs(30))),
+                notes: None,
+            })
+            .display(),
+            "3 x 10 bobs @ 0:30"
+        );
+    }
+
+    #[test]
     fn total_distance_sums_sections_and_repeats() {
         let w = repeat_workout();
         // 2 throughs × (4×100 + 6×50) = 1400.
@@ -1038,6 +1142,7 @@ mod tests {
         let s = w.to_string();
         assert!(s.contains("Main Set"));
         assert!(s.contains("1400 yd"));
+        assert!(s.contains("100 yd @ 2:00"));
     }
 
     #[test]
