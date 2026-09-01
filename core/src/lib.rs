@@ -389,6 +389,10 @@ pub struct RepeatStep {
     pub rest_between: Option<Seconds>,
     /// The steps repeated, in order.
     pub inner: Vec<Step>,
+    /// Free-form notes applying to the whole repetition, e.g. per-rep-range
+    /// splits (`#1-3 kick, #4-6 pull`).
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// A stroke breakdown of one distance, e.g. the parts of `100 IM`.
@@ -406,12 +410,15 @@ pub struct BreakdownStep {
 }
 
 /// Active-recovery step swum off base, e.g. `50 easy`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecoveryStep {
     /// Distance of the recovery swim.
     pub distance: Distance,
     /// Recovery stroke; `None` means freestyle.
     pub stroke: Option<Stroke>,
+    /// Free-form notes.
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// A technique drill counted by reps rather than by swim distance or rest
@@ -721,6 +728,7 @@ impl Workout {
                 });
             }
             Step::Repeat(r) => {
+                let start = out.len();
                 for rep in 0..r.count {
                     for inner in &r.inner {
                         self.flatten_step(inner, out);
@@ -737,6 +745,17 @@ impl Workout {
                             intensity: Intensity::Rest,
                         });
                     }
+                }
+                // Whole-repeat notes (e.g. per-rep-range splits) apply to the
+                // first step swum in the first repetition.
+                if let Some(n) = &r.notes
+                    && out.len() > start
+                {
+                    let first = &mut out[start];
+                    first.notes = Some(match first.notes.take() {
+                        Some(p) => format!("{n} {p}"),
+                        None => n.clone(),
+                    });
                 }
             }
             Step::Breakdown(b) => {
@@ -767,7 +786,7 @@ impl Workout {
                     time: None,
                     stroke: r.stroke,
                     name: Some(format!("{} easy", r.distance)),
-                    notes: None,
+                    notes: r.notes.clone(),
                     intensity: Intensity::Recovery,
                 });
             }
@@ -993,6 +1012,7 @@ mod tests {
                         intensity: Intensity::default(),
                         notes: None,
                     })],
+                    notes: None,
                 }),
                 Step::Repeat(RepeatStep {
                     count: 6,
@@ -1004,11 +1024,13 @@ mod tests {
                         intensity: Intensity::default(),
                         notes: None,
                     })],
+                    notes: None,
                 }),
                 Step::Rest {
                     secs: Seconds::secs(30),
                 },
             ],
+            notes: None,
         });
         w.sections.push(Section {
             label: SectionLabel::Main,
@@ -1047,11 +1069,37 @@ mod tests {
                     intensity: Intensity::default(),
                     notes: None,
                 })],
+                notes: None,
             })],
             subtotal: None,
         });
         // 3 swims + rest after reps 1 and 2 only.
         assert_eq!(w.flat_steps().len(), 5);
+    }
+
+    #[test]
+    fn repeat_notes_carry_to_first_inner_step() {
+        let mut w = Workout::new(Pool::yards25());
+        w.sections.push(Section {
+            label: SectionLabel::Main,
+            steps: vec![Step::Repeat(RepeatStep {
+                count: 2,
+                rest_between: None,
+                inner: vec![Step::Distance(DistanceStep {
+                    distance: Distance::yards(100),
+                    stroke: None,
+                    interval: None,
+                    intensity: Intensity::default(),
+                    notes: None,
+                })],
+                notes: Some("#1-3 kick, #4-6 pull".into()),
+            })],
+            subtotal: None,
+        });
+        let flat = w.flat_steps();
+        assert_eq!(flat.len(), 2);
+        assert_eq!(flat[0].notes.as_deref(), Some("#1-3 kick, #4-6 pull"));
+        assert_eq!(flat[1].notes, None);
     }
 
     #[test]
