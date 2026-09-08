@@ -10,6 +10,7 @@ license = "MIT"
 
 [workspace.dependencies]
 rustyfit = "0.10.2"
+embedded-io-adapters = { version = "0.7.0", features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

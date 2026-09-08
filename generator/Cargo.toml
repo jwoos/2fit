@@ -19,5 +19,6 @@ workspace = true
 [dependencies]
 fit_core = { path = "../core" }
 rustyfit.workspace = true
+embedded-io-adapters.workspace = true
 anyhow.workspace = true
 clap.workspace = true
