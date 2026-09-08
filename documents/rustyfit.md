@@ -21,11 +21,12 @@ edition 2024, MSRV `rust-version = 1.93`).
 ## Encoding pattern (from crate docs + source)
 
 ```rust
-use embedded_io::{Seek, Write};               // traits from embedded-io 0.7
+// Resolved pattern (used by generator/src/fit/mod.rs, verified working):
+use embedded_io_adapters::std::FromStd;       // embedded-io-adapters 0.7, feature "std"
 use rustyfit::{
     Encoder,
     profile::{mesgdef, typedef},
-    proto::FIT,
+    proto::{FIT, Message},
 };
 
 let mut fit = FIT {
@@ -37,9 +38,10 @@ let mut fit = FIT {
     ],
     ..Default::default()
 };
-let mut writer = MemWriter::new();            // our Vec<u8> Write+Seek
+let mut buf = Vec::<u8>::new();
 let mut enc = Encoder::new();
-enc.encode(&mut writer, &mut fit)?;           // W: Write + Seek, fit: &mut FIT
+enc.encode(FromStd::new(std::io::Cursor::new(&mut buf)), &mut fit)?;
+// bytes: `buf` (Cursor<&mut Vec<u8>>; FromStd adapts embedded-io → std)
 ```
 
 Key signatures (source):
@@ -56,15 +58,16 @@ Key signatures (source):
 - `Encoder::builder()` options: `endianness`, `protocol_version`,
   `header_option` — defaults (LittleEndian, V2, 14-byte header) are what we want.
 
-## Our writer problem
+## Our writer problem — RESOLVED
 
-`Encode` needs `Write + Seek` (§ embedded_io::Write/Seek, NOT std). For a `.fit`
-file output we wrap `File`; for stdout (no seek) we buffer: encode into
-`Vec<u8>` in memory (workout files are tiny — a handful of WorkoutStep
-messages), then `stdout().write_all(&bytes)`.
-embedded-io 0.7 provides `impl Write for Vec<u8>` (no Seek), so we may need a
-trivial `Cursor<Vec<u8>>` adapter (both `Seek`+`Write`) or to seek a `Vec`.
-Verify during impl whether a std adapter (`embedded-io-std`?) is needed.
+`encode` needs `Write + Seek` (embedded-io 0.7 traits, NOT std). No custom
+writer needed: **`embedded_io_adapters::std::FromStd`** (crate
+`embedded-io-adapters` 0.7, feature `std`) wraps any std type —
+`FromStd::new(Cursor::new(&mut buf))` gives a by-value `Write + Seek` over
+`&mut Vec<u8>`; the bytes afterwards are in `buf`. For file output the CLI
+just writes the `Vec<u8>` (no need to encode to a `File` directly).
+Dep added to workspace (`embedded-io-adapters 0.7.0` feature `std`) — the
+same dep rustyfit itself uses in its tests.
 
 ## Swimmer-relevant constants (from `profile/typedef/`)
 
@@ -81,18 +84,28 @@ Verify during impl whether a std adapter (`embedded-io-std`?) is needed.
 | `WorkoutStep.duration_value` | uint32 (m × 100 for DISTANCE per Profile; secs for TIME) | workout_step.rs |
 | `FileId` fields | TYPE=0, MANUFACTURER=1, PRODUCT=2, SERIAL_NUMBER=3, TIME_CREATED=4, NUMBER=5, PRODUCT_NAME=8 | file_id.rs |
 
-## Open question: `target_value` for swim stroke
+## `target_value` for swim stroke — RESOLVED
 
-For `target_type = SWIM_STROKE(11)`, the FIT profile defines the stroke values
-(free=0, breast=1, back=2, fly=3, IM=4) — confirm the exact enum (may be a
-`typedef::SwimStroke` or inline in `WktStepTarget`) before encoding. Grep
-`swim` in `profile/typedef/`. `Any`/non-freestyle has no single FIT code —
-plan: map `Any` → omit `target_value` (or pick a representative); decide when
-implementing the encoder.
+`typedef::SwimStroke(pub u8)` (swim_stroke.rs), the `target_value` when
+`target_type = SWIM_STROKE(11)`. Verified values (note: differ from the old
+FIT-profile guess above — the crate source is authoritative):
 
-## `Workout.capabilities`
+| const | value | const | value |
+| --- | --- | --- | --- |
+| FREESTYLE | 0 | DRILL | 4 |
+| BACKSTROKE | 1 | MIXED | 5 |
+| BREASTSTROKE | 2 | IM | 6 |
+| BUTTERFLY | 3 | RIMO | 8 |
 
-`WorkoutCapabilities` (uint32z) is a bitfield of which step duration/target
-types are used. If we only emit DISTANCE+SWIM_STROKE and TIME steps, set the
-corresponding bits (or leave default — verify decoder tolerance). Decide in
-encoder impl.
+(no 7; IM_BY_ROUND exists in the profile between IM and RIMO.)
+Mapping (decided, encoder committed 2026-09-08): Free→0, Back→1,
+Breast→2, Fly→3, IM→6 (defensive: standard 100/200/300 IMs are already
+broken down by `flat_steps`), `Any`/`None`/future strokes → **omit target
+entirely** (`target_type` left at `u8::MAX`, skipped on encode).
+
+## `Workout.capabilities` — RESOLVED
+
+Left 0. The field is **UINT32Z whose invalid value is 0**, so a 0 is skipped
+on encode (no capabilities claimed); round-trip decoder tolerance verified in
+`fit::tests::round_trip_mapping`. Revisit only if a target type beyond
+SWIM_STROKE/TIME+DISTANCE is ever emitted (bit 0 = "custom" per profile).

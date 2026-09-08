@@ -40,49 +40,31 @@ I want to work on a program which has two major components:
 
 OKAY TO EDIT BELOW THIS
 
-TURN: 5
+TURN: 6
 
-# Checkpoint (2026-09-01) — stop here; `.fit` encoder is mid-research
+# Checkpoint (2026-09-08) — encoder committed; next: CLI + round-trip fixture test
 
-## Done (committed; working tree clean)
-- **Core** final: `Step::Technique` (`1f3d097`) + `notes` on `RepeatStep`/`RecoveryStep` (`3e08042`). 18 core tests pass.
-- **swimdojo parser** (`2cea9c5`): `generator/src/parser/swimdojo.rs`, 12 tests (grammar + 3 real fixtures in `documents/swimdojo-fixtures/`, each reconciling to stated totals 1400/1000/800).
-- **Docs** (`afde2c3`): `swimdojo-site.md` (confirmed detail URLs + Post Body block classes, subtotal caveat, notation variants); `prompt.md` TURN→5, parser task checked, fixtures referenced, changelog.
-- Workspace green: 30 tests (18 core + 12 generator); `cargo clippy` + `cargo fmt` clean.
+## Done this turn — commit `f21687c` (working tree clean)
+- **`.fit` encoder** `generator/src/fit/mod.rs`: `to_fit(&Workout) -> Result<Vec<u8>, Error>` (Error = `rustyfit::EncoderError<std::io::Error>`). 4 new tests; workspace 34 (18 core + 16 generator); clippy + fmt clean.
+- `documents/rustyfit.md`: all three open items RESOLVED (SwimStroke table, capabilities, writer).
 
-## Pick up next: `.fit` encoder — `generator/src/fit/mod.rs` (still a 1-line stub)
-All facts below derived from rustyfit 0.10.2 source *this session* — do not re-derive.
+Encoder decisions (data-backed; source = rustyfit registry source, tests round-trip via rustyfit's own `Decoder`):
+- Writer: `FromStd::new(Cursor::new(&mut buf))` (dep `embedded-io-adapters 0.7` feature `std`, added to workspace + generator) — `enc.encode(writer /*by value*/, &mut fit)`, bytes in `buf`.
+- `FileId`: type WORKOUT, `Manufacturer::DEVELOPMENT` (255, the reserved development vendor — the non-OEM value), product_name "2fit".
+- `pool_length` always meters×100 (profile unit); `pool_length_unit` is a *display hint*: METRIC for m pools, STATUTE for yd pools (25 yd → 2286, rendered 25 yd not 22.86 m).
+- Stroke target (SWIM_STROKE=11): Free/Back/Breast/Fly/IM → 0/1/2/3/6 (crate `typedef::SwimStroke`, verified; IM defensive since 100/200/300 IMs are broken down by `flat_steps`); `None` (swimdojo freestyle-default), `Any` (no single code), future strokes → target omitted (invalid `u8::MAX` skips on encode).
+- `capabilities` = 0 (UINT32Z invalid=0 → skipped); decoder tolerance proven by the round-trip test.
+- Interval paces are not expressible on FIT `WorkoutStep` (only a DISTANCE/TIME duration + one target) → they survive only in `wkt_step_name` (step name = core `Step::display()`, e.g. `100 yd @ 2:00`).
+- Core `Unit`/`Stroke`/`Intensity` are `#[non_exhaustive]` → wildcard arms with conservative fallbacks (METRIC / omit target / OTHER).
+- Conversion: meters `value.saturating_mul(100)`; yards `(v*9144+50)/100` u64-rounded.
 
-**Deps to ADD** (embedded-io is only transitive via rustyfit now; not in our tree):
-- workspace `[workspace.dependencies]`: `embedded-io = "0.7.1"` and `embedded-io-adapters = { version = "0.7.0", features = ["std"] }` (adapters = `FromStd`).
-- generator `[dependencies]`: `embedded-io.workspace = true`, `embedded-io-adapters.workspace = true`.
-- In-memory writer pattern (from rustyfit's own tests): `let mut w = FromStd::new(std::io::Cursor::new(Vec::new()));` → `Encoder::new().encode(w, &mut fit)?` → recover bytes from `w` (confirm the adapter's accessor, e.g. `into_inner()`/`get_ref()`, when wiring).
-
-**API**: `Encoder::encode<W: embedded_io::Write + Seek>(&mut self, writer: W /*by value*/, fit: &mut FIT) -> Result<(), Error<W::Error>>`. `FIT{file_header, messages: Vec<Message>, crc}` (Default); `Message::from(mesgdef)`.
-**Public wrapper**: `fit::to_fit(&Workout) -> Result<Vec<u8>, Error>` (bytes so CLI can file-or-stdout).
-
-**Messages (in order)**:
-1. `FileId` — `r#type=File::WORKOUT`(5); `manufacturer` to a valid non-invalid value (check `typedef::Manufacturer` for a reserved/"none"); rest stay `new()` invalid (skipped).
-2. `Workout` — `sport=Sport::SWIMMING`(5), `sub_sport=SubSport::LAP_SWIMMING`(17), `num_valid_steps=flat_steps.len() as u16`, `wkt_name`←name, `wkt_description`←description, `pool_length`/`pool_length_unit`(→`DisplayMeasure::METRIC` 0) from pool; `capabilities` leave 0 (skipped) for v1.
-3. one `WorkoutStep` per `Workout::flat_steps()` entry (repeats/IM already expanded; Technique already dropped): `wkt_step_name`←name, `notes`←notes, `intensity` mapped; if `flat.time` Some → `WktStepDuration::TIME`(0)+`duration_value=as_secs()`, no target; else `WktStepDuration::DISTANCE`(1)+`duration_value`=m×100, + stroke target.
-
-**Field facts (source-verified)**: `WorkoutStep.duration_value` is plain `u32` (def `u32::MAX`), no scale helper → we set m×100 (DISTANCE) or secs (TIME). `Workout.pool_length` u16 scale-100 meters (`set_pool_length_scaled` or `=m*100`). `SwimStroke`(=target_value when target_type SWIM_STROKE=11): free=0 back=1 breast=2 fly=3 drill=4 mixed=5 IM=6 im_by_round=7 rimo=8. `Intensity` ACTIVE..OTHER = 0..6. Unset→`new()` invalid→skipped.
-
-**Conversions** (1 yd=0.9144 m; FIT distances are meters×100; pool_length meters×100):
-- Distance: meters → `value*100`; yards → `(value*9144+50)/100` (int round).
-- pool_length: meters → `length*100`; yards → `(length*9144+50)/100` (25yd→2286, 50m→5000).
-
-**Stroke→target**: Free→(11,0) Back→(11,1) Breast→(11,2) Fly→(11,3) IM→(11,6, defensive); **`Any` (any non-free) → omit target** (FIT has no such code). `stroke=None`: DECIDE omit vs explicit freestyle=0 (lean omit; note choice when coding).
-
-**Decide while coding**: FileId.manufacturer value; None-stroke omit-vs-0; leave `capabilities`=0.
-
-## After encoder
-- CLI `generator/src/main.rs` (stub): clap `2fit-gen [--file <path>|-] [-o <out>|stdout]` [+ `--base <mm:ss>` for `@ b`]; notation→parser→to_fit→write.
-- Lib exports `generator/src/lib.rs`: re-export `parser`/`fit` + `parse_str`/`to_fit`.
-- **Round-trip test**: encode one of the 3 fixtures, `Decoder` it back, assert sport/sub_sport/pool_length + a couple of steps (name/duration/target). Closes the "sample .fit + verify" task.
+## Pick up next: CLI + lib exports, then round-trip fixture test
+- `generator/src/main.rs` (still "not implemented yet" stub): clap-derive `2fit-gen`: `-f/--file <path>` (default stdin; `-` = stdin), `-o/--out <path>` (default stdout), `--pool <Nyd|Nm>` (default `25yd` — the notation's assumed pool; parser takes it), `--base <m:ss>` (optional; required iff text has `@ b`). Flow: read → `parser::swimdojo::parse(&text, pool, base100)` → `fit::to_fit(&workout)` → write bytes; errors via `anyhow` to stderr + non-zero exit.
+- `generator/src/lib.rs`: consider a `pub fn parse_str(...)` sugar + re-export of `fit_core` items for library users (modules `fit`/`parser` already public).
+- **Round-trip task**: `parse`(a real fixture, e.g. `documents/swimdojo-fixtures/goblin-shark.txt`) → `to_fit` → rustyfit `Decoder`; assert num_valid_steps + spot-check step durations/targets + pool_length. Closes "Generate a sample .fit and verify" (fixtures' pool units: goblin/box-crab 25 yd, sea-otter 50 m — check fixture headers before asserting).
 - Then Scraper (listing+detail+filters) → later the site-format→schema inference.
 
-(Tasks: parser[x] encoder[•] cli/lib[ ] round-trip[ ] scraper[ ] infer[ ])
+(Tasks: parser[x] encoder[x] cli/lib[ ] round-trip[ ] scraper[ ] infer[ ])
 
 # Plan
 Goal: two Rust binaries in one Cargo workspace sharing a core "IDL" + a rustyfit-based .fit encoder. Decision: use **rustyfit v0.10.2** (see Decisions).
@@ -113,7 +95,7 @@ Verified against rustyfit 0.10.2 source: **documents/rustyfit.md** (constants: s
 - [x] Scaffold Cargo workspace (`core`, `generator`, `scraper`) + README
 - [x] Define core IDL types (Workout/Section/Step/Stroke/Interval/Pool, units) + unit tests (16 passing)
 - [x] Generator: swimdojo parser → core (distance, `@` intervals incl. base math, repeats, IM, recovery) — `parser::swimdojo`, 12 tests incl. 3 real fixtures
-- [ ] Generator: rustyfit encoder core → .fit (Workout + WorkoutStep), file/stdout
+- [x] Generator: rustyfit encoder core → .fit (Workout + WorkoutStep), file/stdout — `fit::to_fit` (CLI file/stdout part is the next CLI task)
 - [ ] Generator: CLI (file + stdin) + library exports; parse tests on real swimdojo texts
 - [ ] Generate a sample .fit and verify by decoding (round-trip), spot-check fields
 - [ ] Scraper: swimdojo scrape (listing + detail) + filters (distance/level/stroke/tag/author/pagination)
@@ -133,6 +115,7 @@ Verified against rustyfit 0.10.2 source: **documents/rustyfit.md** (constants: s
 - fit-sdk-rust (rejected): https://docs.rs/fit-sdk-rust — std crate named `fit`, encodes, younger.
 
 # Changelog
+- Turn 6 (2026-09-08): Implemented the `.fit` encoder (`generator/src/fit/mod.rs`, commit `f21687c`). `fit::to_fit(&Workout) -> Result<Vec<u8>, EncoderError<io::Error>>` builds `FileId` (WORKOUT / DEVELOPMENT-255 / "2fit") + `Workout` (SWIMMING, LAP_SWIMMING, name, description, pool_length m×100, METRIC/STATUTE display hint) + one `WorkoutStep` per `flat_steps()` entry: DISTANCE (m×100, yards rounded via (v·9144+50)/100) or TIME (secs), SWIM_STROKE target 0/1/2/3/6 (omitted for `None`/`Any`/future strokes), intensity 1:1, `wkt_step_name` = core `Step::display()` (so interval paces survive in the name), notes carried. Core enums are `#[non_exhaustive]` → conservative wildcard fallbacks (METRIC / omit / OTHER). Writer = `FromStd::new(Cursor::new(&mut Vec<u8>))` (new dep `embedded-io-adapters 0.7`, feature `std`, added to workspace + generator — same dep rustyfit's own tests use). 4 tests encode then round-trip through rustyfit's `Decoder`, asserting the `.FIT` magic and every mapped field incl. STATUTE display + pool_length 2286/5000. Clippy caught a real bug: `value * 100` in u32 panics on overflow in debug builds → `saturating_mul`. Fixed stale registry facts in `documents/rustyfit.md` and closed all 3 open items (actual `SwimStroke` table; capabilities=0 skipped as UINT32Z-invalid; writer resolved, no custom adapter needed). Workspace: 34 tests, clippy + fmt clean.
 - Turn 5 (2026-09-01): Implemented the swimdojo parser (`generator/src/parser/swimdojo.rs`, +906). Line classifier (blank → `TOTAL:` → section label → bare/parenthesized subtotal → `N x through:` → `—>` annotation → digit-led step → prose), step builder (counted set, `N x through:` block, drills `bobs`/`sculls` → `Step::Technique`, rest/easy, distance), interval parser (`@ kb`, `@ b`, `@ b +:30` / `+2:00`, fixed `2:00`/`:30`/`45`). Notes attach to the previous step (RepeatStep/RecoveryStep gained `notes` slots). 3 real pages normalized to `documents/swimdojo-fixtures/*.txt`; 12 parser tests pass, each reconciling to its stated total (Goblin 1400, Box Crab 1000, Sea Otter 800). Caught a test-data typo via hexdump: Goblin line 16 was written `@ b +:+30` but the site says `@ b +:30` — fixed the fixture, not the code. Updated `documents/swimdojo-site.md` (confirmed detail URLs + body block classes, subtotal-vs-step-sum caveat, notation-variant list). Workspace green: 30 tests (18 core + 12 generator), `cargo clippy` + `cargo fmt` clean. Commits: `1f3d097` (core Technique), `3e08042` (core notes), `2cea9c5` (parser + fixtures).
 - Turn 4 (2026-08-31): User added Guidelines 6–7 (documents/, record knowledge) and updated the Rust toolchain (rustc/cargo now 1.98; rustyfit 0.10.2 requires MSRV 1.93 + edition 2024 — that's why the bump was needed). Bumped workspace rustyfit `0.6.1 → 0.10.2` (latest on crates.io; the lockfile already had 0.10.2), set edition 2024 + `rust-version 1.93`; scaffold builds clean. Implemented core IDL (`core/src/lib.rs`): Unit/Distance/Seconds/Pool/Stroke/Intensity/IntervalSpec/Part/DistanceStep/RepeatStep/BreakdownStep/RecoveryStep/Step/SectionLabel/Section/Workout/FlatStep/Error — 16 unit tests pass (incl. base-math "do not scale the offset", IM breakdown, repeat expansion, serde round-trip). Verified rustyfit encoding API from the registry source → documents/rustyfit.md (key: `Encoder::encode(W: Write+Seek, &mut FIT)`; embedded-io has `Write` for `Vec<u8>` but no `Seek` ⇒ plan a tiny in-memory `Write+Seek` writer; `SubSport::LAP_SWIMMING=17` is the pool swim, not a `POOL` const; `pool_length` scaled ×100).
 - Turn 3 (2026-08-30): User added `Changelog` section, `TURN:` field, and Guideline 5 (track turn). Decided FIT crate = **rustyfit v0.10.2** (evidence: encodes + `pool_length` + `DISTANCE`/`SWIM_STROKE` fields). Wrote Plan (workspace layout, core IDL, base-math rule, .fit mapping) and Tasks above. No code yet.
