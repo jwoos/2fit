@@ -129,3 +129,36 @@ Implemented in `scraper/` (`fit_scraper` lib + `2fit-scrape` bin) on the
   `cargo test` needs no network.
 - **robots.txt**: disallows `?tag=`/`?author=` for crawlers; `format=rss`
   is *not* disallowed — the feed path was chosen partly for this reason.
+
+## Format schemas (turn 9)
+
+Spec Generator 7 ("store workout formats as schemas") + Scraper 3
+("infer a workout format from a site, generating a schema for the
+generator to consume"), closed this turn:
+
+- **`fit_core::FormatSchema`** — one notation's vocabulary as data:
+  `section_labels`, `total_prefix`, `repeat_word`, `annotation_markers`,
+  `strokes`, `freestyle_words`, `drill_words`, `interval_marker`,
+  `clock_prefix`, `base_marker`, `rest_words`, `recovery_word`,
+  `count_separator` (all serde; matching is case-insensitive whole-token).
+  The parser reads these tables instead of string literals
+  (`parse_with_schema`; `parse` = swimdojo schema), so a new site's format
+  is a JSON file, not a new parser. `Set N` labels stay structural code
+  (numeric, not vocabulary).
+- **`fit_generator::parser::schema::swimdojo()`** — the swimdojo vocabulary
+  as pure data (every entry traces to a parser behavior + grammar section).
+- **`fit_scraper::schema::infer(name, samples)`** — votes per line class
+  (labels/totals/repeats/annotations/steps; prose ignored like the parser):
+  repeat detection requires a bare `N x WORD` (so `500 swim` and
+  `10 x 200` never vote; spaceless `3x through:` handled), stroke/drill
+  words are also harvested from annotation quotes (`800 IM (200 of each
+  stroke)`, `easy back`), rest words scan both sides of `@`. On the 3
+  fixtures: zero gaps, and the inferred schema parses all 3 to workouts
+  **equal** to the default parser (`inferred_schema_parses_fixtures`), and
+  end-to-end `2fit-gen --format inferred.json` is byte-identical to the
+  default (1719-byte goblin `.fit`). Unknown tables keep swimdojo
+  structural defaults and are reported in `Inference::gaps`;
+  unclassifiable lines (subtotals, trailing prose) in
+  `Inference::unclassified` (stderr report; JSON goes to stdout).
+- CLIs: `2fit-scrape schema FILE… [--name]` emits the schema JSON;
+  `2fit-gen --format schema.json` parses with it.

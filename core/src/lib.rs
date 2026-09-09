@@ -850,6 +850,81 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+// --- Format schemas ---------------------------------------------------------
+//
+// A `FormatSchema` stores one workout notation's vocabulary as data (spec
+// Generator 7 / Scraper 3): section labels, stroke/drill words, markers.
+// The swimdojo parser reads its tables from a schema instead of literals,
+// so a new site's format is a new `FormatSchema` value — built by hand or
+// by `fit_scraper::schema::infer` — not a new parser.
+
+/// One notation's vocabulary, stored as data for the generator to consume.
+///
+/// Matching is case-insensitive on whole whitespace-separated tokens,
+/// except where noted per field. All strings are lowercase in practice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FormatSchema {
+    /// Schema identifier, e.g. `"swimdojo"`.
+    pub name: String,
+    /// Words opening a totaled group: `(label, section)` in match order.
+    /// A line equals a label (trailing `:` allowed) modulo case.
+    pub section_labels: Vec<(String, SectionLabel)>,
+    /// Prefix starting the stated workout total (`TOTAL: 6,000`).
+    pub total_prefix: String,
+    /// Word opening a repeat block (`2x through:`).
+    pub repeat_word: String,
+    /// Line prefixes marking an annotation (`—> note`).
+    pub annotation_markers: Vec<String>,
+    /// `(word, stroke)` pairs in match order (`stroke` ⇒ `Any`).
+    pub strokes: Vec<(String, Stroke)>,
+    /// Words consumed silently as freestyle (`free`, `swim`).
+    pub freestyle_words: Vec<String>,
+    /// Rep-counted drill nouns (`3 x 10 bobs` ⇒ `Technique`, 0 distance).
+    pub drill_words: Vec<String>,
+    /// Interval marker: everything after the first `@` is the interval.
+    pub interval_marker: String,
+    /// `kb` prefix: kickboard-clock interval, kept as a note, not a pace.
+    pub clock_prefix: String,
+    /// Base-pace marker (`b` in `@ b+15`).
+    pub base_marker: String,
+    /// Words that together spell a rest step (`30 seconds rest`).
+    pub rest_words: Vec<String>,
+    /// Word marking active recovery (`50 easy` ⇒ `Recovery`, off base).
+    pub recovery_word: String,
+    /// Count separator in `4 x 100` (` x `, with spaces).
+    pub count_separator: String,
+}
+
+impl FormatSchema {
+    /// Stroke for a lowercase token, if the schema names one.
+    pub fn stroke_of(&self, word: &str) -> Option<Stroke> {
+        self.strokes
+            .iter()
+            .find(|(w, _)| w == word)
+            .map(|(_, s)| *s)
+    }
+
+    /// Whether a lowercase token is a silent freestyle word.
+    pub fn is_freestyle(&self, word: &str) -> bool {
+        self.freestyle_words.iter().any(|w| w == word)
+    }
+
+    /// Whether a lowercase token is a rep-counted drill noun.
+    pub fn is_drill(&self, word: &str) -> bool {
+        self.drill_words.iter().any(|w| w == word)
+    }
+
+    /// Section label for a line, if the schema names one (trailing `:`
+    /// allowed, case-insensitive via lowercase input).
+    pub fn section_of(&self, line_lower: &str) -> Option<SectionLabel> {
+        let low = line_lower.trim_end_matches([':', ' ']);
+        self.section_labels
+            .iter()
+            .find(|(label, _)| label == low)
+            .map(|(_, s)| *s)
+    }
+}
+
 // --- Tests ------------------------------------------------------------------
 
 #[cfg(test)]

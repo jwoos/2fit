@@ -333,6 +333,8 @@ dependencies = [
  "embedded-io-adapters",
  "fit_core",
  "rustyfit",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -343,6 +345,7 @@ dependencies = [
  "chrono",
  "clap",
  "fit_core",
+ "fit_generator",
  "html-escape",
  "rss",
  "serde",

@@ -21,3 +21,17 @@ pub fn parse_str(
 ) -> Result<fit_core::Workout, parser::swimdojo::Error> {
     parser::swimdojo::parse(text, pool, base100)
 }
+
+/// Parse notation driven by a stored [`fit_core::FormatSchema`].
+///
+/// The schema's vocabulary tables replace swimdojo's words; structural
+/// rules are shared. Used with schemas from `fit_scraper::schema::infer`
+/// (or hand-written JSON via [`parser::schema::swimdojo`] as a template).
+pub fn parse_with_schema(
+    text: &str,
+    pool: fit_core::Pool,
+    base100: Option<fit_core::Seconds>,
+    schema: &fit_core::FormatSchema,
+) -> Result<fit_core::Workout, parser::swimdojo::Error> {
+    parser::swimdojo::parse_with_schema(text, pool, base100, schema)
+}

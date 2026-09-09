@@ -18,6 +18,7 @@ workspace = true
 
 [dependencies]
 fit_core = { path = "../core" }
+fit_generator = { path = "../generator" }
 anyhow.workspace = true
 clap.workspace = true
 ureq.workspace = true

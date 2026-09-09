@@ -30,8 +30,8 @@
 use std::fmt;
 
 use fit_core::{
-    DistanceStep, IntervalSpec, Pool, RecoveryStep, RepeatStep, Seconds, Section, SectionLabel,
-    Step, Stroke, TechniqueStep, Workout,
+    DistanceStep, FormatSchema, IntervalSpec, Pool, RecoveryStep, RepeatStep, Seconds, Section,
+    SectionLabel, Step, Stroke, TechniqueStep, Workout,
 };
 
 /// A line of notation that could not be parsed.
@@ -61,6 +61,20 @@ impl std::error::Error for Error {}
 /// the line number; other lines are never silently dropped except prose
 /// with no step to attach to.
 pub fn parse(text: &str, pool: Pool, base100: Option<Seconds>) -> Result<Workout, Error> {
+    parse_with_schema(text, pool, base100, &super::schema::swimdojo())
+}
+
+/// Parse notation driven by a [`FormatSchema`]'s vocabulary tables.
+///
+/// [`parse`] is this with the swimdojo schema; a future site passes its
+/// own schema value. Structural rules (subtotal positions, repeat blocks,
+/// note attachment) are format-shared; only the words come from the schema.
+pub fn parse_with_schema(
+    text: &str,
+    pool: Pool,
+    base100: Option<Seconds>,
+    schema: &FormatSchema,
+) -> Result<Workout, Error> {
     let mut w = Workout::new(pool);
     w.base100 = base100;
     let mut through: Option<RepeatStep> = None;
@@ -72,11 +86,11 @@ pub fn parse(text: &str, pool: Pool, base100: Option<Seconds>) -> Result<Workout
         }
         let n = idx + 1;
 
-        if is_total(line) {
+        if is_total(line, schema) {
             continue;
         }
 
-        if let Some(label) = label_of(line) {
+        if let Some(label) = label_of(line, schema) {
             close_through(&mut through, &mut w.sections);
             w.sections.push(Section {
                 label,
@@ -112,7 +126,7 @@ pub fn parse(text: &str, pool: Pool, base100: Option<Seconds>) -> Result<Workout
             continue;
         }
 
-        if let Some(count) = through_count(line) {
+        if let Some(count) = through_count(line, schema) {
             close_through(&mut through, &mut w.sections);
             ensure_section(&mut w.sections);
             through = Some(RepeatStep {
@@ -124,7 +138,7 @@ pub fn parse(text: &str, pool: Pool, base100: Option<Seconds>) -> Result<Workout
             continue;
         }
 
-        if let Some(note) = annotation_text(line) {
+        if let Some(note) = annotation_text(line, schema) {
             note_to(
                 through
                     .as_mut()
@@ -141,7 +155,7 @@ pub fn parse(text: &str, pool: Pool, base100: Option<Seconds>) -> Result<Workout
             .next()
             .is_some_and(|c: char| c.is_ascii_digit())
         {
-            let step = parse_step(&w, line, n)?;
+            let step = parse_step(&w, line, n, schema)?;
             push(&mut through, &mut w.sections, step);
             continue;
         }
@@ -220,24 +234,19 @@ fn attach(steps: &mut [Step], note: &str) {
 }
 
 /// `TOTAL: 6,000` / `Total: 6,000` — the stated workout total.
-fn is_total(line: &str) -> bool {
-    line.to_ascii_lowercase().starts_with("total")
+fn is_total(line: &str, schema: &FormatSchema) -> bool {
+    line.to_ascii_lowercase().starts_with(&schema.total_prefix)
 }
 
-fn label_of(line: &str) -> Option<SectionLabel> {
+fn label_of(line: &str, schema: &FormatSchema) -> Option<SectionLabel> {
     let lower = line.to_ascii_lowercase();
-    let low = lower.trim_end_matches([':', ' ']);
-    if low == "warm up" || low == "warmup" {
-        Some(SectionLabel::WarmUp)
-    } else if low == "warm down" || low == "cool down" || low == "cooldown" {
-        Some(SectionLabel::CoolDown)
-    } else if low == "main set" || low == "main" {
-        Some(SectionLabel::Main)
-    } else {
-        low.strip_prefix("set ")
-            .and_then(|rest| rest.trim().parse::<u32>().ok())
-            .map(SectionLabel::Set)
+    if let Some(label) = schema.section_of(&lower) {
+        return Some(label);
     }
+    lower
+        .strip_prefix("set ")
+        .and_then(|rest| rest.trim().parse::<u32>().ok())
+        .map(SectionLabel::Set)
 }
 
 /// Whole-line number, optionally parenthesized and comma-grouped.
@@ -255,11 +264,11 @@ fn bare_number(line: &str) -> Option<(u32, bool)> {
     digits.parse().ok().map(|v| (v, parenthesized))
 }
 
-/// `2x through` / `2 x through` (case-insensitive, trailing `:` allowed).
-fn through_count(line: &str) -> Option<u32> {
+/// `2x through:` / `2 x through:` (case-insensitive, trailing `:` allowed).
+fn through_count(line: &str, schema: &FormatSchema) -> Option<u32> {
     let lower = line.to_ascii_lowercase();
     let low = lower.trim().trim_end_matches(':');
-    let head = low.strip_suffix("through")?;
+    let head = low.strip_suffix(schema.repeat_word.as_str())?;
     let head = head.trim_end().strip_suffix("x")?;
     let n = head.trim_end();
     if n.is_empty() || !n.chars().all(|c| c.is_ascii_digit() || c.is_whitespace()) {
@@ -269,24 +278,22 @@ fn through_count(line: &str) -> Option<u32> {
 }
 
 /// Annotation (`—>...`): return the text after the arrow.
-fn annotation_text(line: &str) -> Option<&str> {
-    line.strip_prefix("—>")
-        .or_else(|| line.strip_prefix("–>"))
-        .or_else(|| line.strip_prefix("-->"))
-        .or_else(|| line.strip_prefix("--"))
-        .or_else(|| line.strip_prefix("—"))
-        .or_else(|| line.strip_prefix("–"))
+fn annotation_text<'a>(line: &'a str, schema: &FormatSchema) -> Option<&'a str> {
+    schema
+        .annotation_markers
+        .iter()
+        .find_map(|m| line.strip_prefix(m.as_str()))
         .map(str::trim)
 }
 
 /// One step line: optional `N x` count, a leading number, optional stroke
 /// and drill words, optional `@ interval`, optional `—>` tail annotation.
-fn parse_step(w: &Workout, line: &str, n: usize) -> Result<Step, Error> {
+fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Result<Step, Error> {
     let mut tail_annotation: Option<String> = None;
-    let body = split_arrow(line, &mut tail_annotation);
+    let body = split_arrow(line, &mut tail_annotation, schema);
 
-    let (count, body) = split_count(body);
-    let (left, interval_text) = match body.split_once('@') {
+    let (count, body) = split_count(body, schema);
+    let (left, interval_text) = match body.split_once(schema.interval_marker.as_str()) {
         Some((l, r)) => (l, Some(r.trim())),
         None => (body, None),
     };
@@ -300,13 +307,12 @@ fn parse_step(w: &Workout, line: &str, n: usize) -> Result<Step, Error> {
         .ok_or_else(|| err(n, line, format!("expected a distance, got '{first}'")))?;
     let rest: Vec<&str> = toks.collect();
 
-    let (interval, interval_note) = parse_interval(interval_text, n, line)?;
+    let (interval, interval_note) = parse_interval(interval_text, n, line, schema)?;
     let lower: Vec<String> = rest.iter().map(|t| t.to_ascii_lowercase()).collect();
 
     // Rep-counted drills: `3 x 10 bobs`, `10 sculls` — the leading number
     // is reps, not distance (see `TechniqueStep` docs).
-    const DRILLS: [&str; 4] = ["bob", "bobs", "scull", "sculls"];
-    if let Some(pos) = lower.iter().position(|t| DRILLS.contains(&t.as_str())) {
+    if let Some(pos) = lower.iter().position(|t| schema.is_drill(t)) {
         let drill = rest[pos];
         let mut words = Vec::new();
         words.extend_from_slice(&rest[..pos]);
@@ -321,18 +327,24 @@ fn parse_step(w: &Workout, line: &str, n: usize) -> Result<Step, Error> {
         }));
     }
 
-    let inner: Step = if lower.iter().any(|t| t == "rest")
-        // `30 seconds rest` — a rest step, not a swim.
+    let rest_word = schema
+        .rest_words
+        .first()
+        .map(String::as_str)
+        .unwrap_or("rest");
+    let inner: Step = if lower.iter().any(|t| t == rest_word)
+        // `30 seconds rest` — a rest step, not a swim. Every non-number
+        // token must be a schema rest word.
         && lower
             .iter()
-            .all(|t| matches!(t.as_str(), "rest" | "second" | "seconds"))
+            .all(|t| schema.rest_words.iter().any(|w| w == t))
     {
         Step::Rest {
             secs: Seconds::secs(value),
         }
-    } else if lower.iter().any(|t| t == "easy") {
+    } else if lower.contains(&schema.recovery_word) {
         // `50 easy` — active recovery.
-        let (stroke, words) = take_stroke(&lower, &rest);
+        let (stroke, words) = take_stroke(&lower, &rest, schema);
         let mut notes = join_notes(words, interval_note, tail_annotation);
         // `easy` steps have no interval field; keep the stated one in notes.
         if let Some(iv) = interval {
@@ -347,7 +359,7 @@ fn parse_step(w: &Workout, line: &str, n: usize) -> Result<Step, Error> {
             notes,
         })
     } else {
-        let (stroke, words) = take_stroke(&lower, &rest);
+        let (stroke, words) = take_stroke(&lower, &rest, schema);
         Step::Distance(DistanceStep {
             distance: w.dist(value),
             stroke,
@@ -371,8 +383,16 @@ fn parse_step(w: &Workout, line: &str, n: usize) -> Result<Step, Error> {
 
 /// Split a step line at the first `—>`-style arrow in its interior:
 /// `100 swim strong, breathing every three—> see what your time is`.
-fn split_arrow<'a>(line: &'a str, annotation: &mut Option<String>) -> &'a str {
-    for arrow in ["—>", "–>", "-->"] {
+fn split_arrow<'a>(
+    line: &'a str,
+    annotation: &mut Option<String>,
+    schema: &FormatSchema,
+) -> &'a str {
+    for arrow in schema
+        .annotation_markers
+        .iter()
+        .filter(|m| m.ends_with('>'))
+    {
         if let Some(pos) = line.find(arrow) {
             let (before, after) = line.split_at(pos);
             let note = after[arrow.len()..].trim();
@@ -386,8 +406,8 @@ fn split_arrow<'a>(line: &'a str, annotation: &mut Option<String>) -> &'a str {
 }
 
 /// Peel an `N x ` / `Nx` count prefix, e.g. `4 x 100` → `(4, "100")`.
-fn split_count(body: &str) -> (Option<u32>, &str) {
-    if let Some((n, rest)) = body.split_once(" x ")
+fn split_count<'a>(body: &'a str, schema: &FormatSchema) -> (Option<u32>, &'a str) {
+    if let Some((n, rest)) = body.split_once(schema.count_separator.as_str())
         && let Some(count) = numeric(n)
     {
         return (Some(count), rest.trim_start());
@@ -419,17 +439,18 @@ fn parse_interval(
     text: Option<&str>,
     n: usize,
     line: &str,
+    schema: &FormatSchema,
 ) -> Result<(Option<IntervalSpec>, Option<String>), Error> {
     let Some(text) = text.filter(|t| !t.is_empty()) else {
         return Ok((None, None));
     };
     let low = text.to_ascii_lowercase();
 
-    if low.starts_with("kb") {
+    if low.starts_with(schema.clock_prefix.as_str()) {
         return Ok((None, Some(text.to_string())));
     }
 
-    if let Some(off) = low.strip_prefix('b') {
+    if let Some(off) = low.strip_prefix(schema.base_marker.as_str()) {
         let off = off.trim();
         let (interval, tail) = if off.is_empty() {
             (IntervalSpec::base(), off)
@@ -499,19 +520,22 @@ fn take_time_prefix(s: &str) -> Option<(u32, &str)> {
 }
 
 /// Stroke word(s) in the token list; everything else is note text.
-/// `free`/`swim` are the freestyle default: no stroke, no note.
-fn take_stroke<'a>(lower: &'a [String], rest: &'a [&'a str]) -> (Option<Stroke>, Vec<&'a str>) {
+/// Schema freestyle words are the silent default: no stroke, no note.
+fn take_stroke<'a>(
+    lower: &'a [String],
+    rest: &'a [&'a str],
+    schema: &FormatSchema,
+) -> (Option<Stroke>, Vec<&'a str>) {
     let mut stroke = None;
     let mut words = Vec::new();
     for (i, t) in lower.iter().enumerate() {
-        match t.as_str() {
-            "free" | "swim" => {}
-            "back" | "backstroke" => stroke = Some(Stroke::Back),
-            "breast" | "breaststroke" => stroke = Some(Stroke::Breast),
-            "fly" | "butterfly" => stroke = Some(Stroke::Fly),
-            "im" | "imedley" => stroke = Some(Stroke::IM),
-            "stroke" => stroke = Some(Stroke::Any),
-            _ => words.push(rest[i]),
+        if schema.is_freestyle(t) {
+            continue;
+        }
+        if let Some(s) = schema.stroke_of(t) {
+            stroke = Some(s);
+        } else {
+            words.push(rest[i]);
         }
     }
     (stroke, words)

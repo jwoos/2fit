@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use fit_core::{Pool, Seconds, Unit};
-use fit_generator::{fit, parser::swimdojo};
+use fit_generator::fit;
 
 /// Parse swimdojo workout notation into a .fit file.
 #[derive(Debug, Parser)]
@@ -27,6 +27,11 @@ struct Args {
     /// Base pace per 100, e.g. `1:40`; required iff the text uses `@ b`.
     #[arg(long)]
     base: Option<String>,
+
+    /// Workout-format schema JSON (default: swimdojo vocabulary).
+    /// See `fit_scraper schema` for generating one from samples.
+    #[arg(long)]
+    format: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -34,7 +39,17 @@ fn main() -> Result<()> {
     let text = read_input(args.file.as_deref())?;
     let pool = parse_pool(&args.pool)?;
     let base = args.base.as_deref().map(parse_base).transpose()?;
-    let workout = swimdojo::parse(&text, pool, base).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let schema = match args.format.as_deref() {
+        Some(path) => {
+            let json = std::fs::read_to_string(path)
+                .with_context(|| format!("reading schema {}", path.display()))?;
+            serde_json::from_str(&json)
+                .with_context(|| format!("parsing schema {}", path.display()))?
+        }
+        None => fit_generator::parser::schema::swimdojo(),
+    };
+    let workout = fit_generator::parse_with_schema(&text, pool, base, &schema)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let bytes = fit::to_fit(&workout).map_err(|e| anyhow::anyhow!("{e}"))?;
     match args.out.as_deref() {
         Some(path) => {

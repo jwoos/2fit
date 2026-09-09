@@ -34,6 +34,14 @@ enum Cmd {
         /// Workout page URL (or slug from `list`).
         url: String,
     },
+    /// Infer a workout-format schema from sample notation files.
+    Schema {
+        /// Sample notation files (one workout body each).
+        files: Vec<std::path::PathBuf>,
+        /// Schema name (default `custom`).
+        #[arg(long, default_value = "custom")]
+        name: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -60,6 +68,25 @@ fn main() -> Result<()> {
             let url = normalize_url(&url);
             let w = site.fetch(&url)?;
             print!("{}", w.body);
+        }
+        Cmd::Schema { files, name } => {
+            let samples = files
+                .iter()
+                .map(|path| {
+                    let body = std::fs::read_to_string(path)
+                        .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?;
+                    Ok(fit_scraper::site::ScrapedWorkout {
+                        title: path.display().to_string(),
+                        url: String::new(),
+                        body,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let inf = fit_scraper::schema::infer(&name, &samples);
+            println!("{}", serde_json::to_string_pretty(&inf.schema)?);
+            if !inf.gaps.is_empty() || !inf.unclassified.is_empty() {
+                eprintln!("{inf}");
+            }
         }
     }
     Ok(())
