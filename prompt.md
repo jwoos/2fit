@@ -40,9 +40,24 @@ I want to work on a program which has two major components:
 
 OKAY TO EDIT BELOW THIS
 
-TURN: 6
+TURN: 7
 
-# Checkpoint (2026-09-08) — encoder committed; next: CLI + round-trip fixture test
+# Checkpoint (2026-09-09) — CLI + round-trip done; next: Scraper
+
+## Done this turn — uncommitted (working tree has these changes)
+- **`2fit-gen` CLI** `generator/src/main.rs` (~140 lines): clap-derive args `-f/--file` (default/`-` = stdin), `-o/--out` (default stdout), `--pool <Nyd|Nm>` (default `25yd`), `--base <m:ss|:ss|secs>` (optional). Errors via `anyhow` → stderr + non-zero exit. 2 unit tests (`pools`, `bases`). Smoke-tested: all 3 fixtures encode (goblin 1719 B, box-crab 1298 B, sea-otter 797 B); stdin ≡ file output.
+- **Lib sugar** `generator/src/lib.rs`: `pub fn parse_str(text, pool, base100)` over `parser::swimdojo::parse` + `pub use fit_core`.
+- **Round-trip test** `generator/tests/round_trip.rs`: parse goblin-shark → `to_fit` → `Decoder`; asserts step count, pool_length 2286 + STATUTE, `500 swim` → 45720 + no target, `800 IM @ b+120` → IM target 6.
+- **Bug found by CLI smoke test (data-backed)**: sea-otter's 9×50 repeat concatenates 4 `—>` notes (~305 B) into one FIT `notes` field → rustyfit encode error "value's size in bytes exceeds 255 bytes limit" (FIT `string` max = 255 B incl. NUL). Fix: `fit_str()` truncates all FIT strings to 254 B at a char boundary (name/description/notes) + unit test incl. multi-byte `é` case. Fixture evidence: sea-otter lines 8–11.
+- Test-name correction: goblin's second step displays `800 yd IM @ b+120` (offset `2:00`→`+120`, per `IntervalSpec::Display`), not `@ b`.
+
+Workspace: 38 tests (18 core + 17 generator-lib + 2 CLI + 1 round-trip), clippy + fmt clean.
+
+## Pick up next: Scraper (listing + detail + filters)
+- Per `documents/swimdojo-site.md`: listing `https://www.swimdojo.com/workouts` (+ `?tag=`, `?author=<id>`, `?offset=<epoch-ms>` filters, By Distance/Level/Stroke facets), detail `/workouts/YYYY/M/D/slug`, body HTML `div[data-layout-label="Post Body"]` → `.sqs-block.html-block` → `div.sqs-html-content`. Emit normalized notation text (the `documents/swimdojo-fixtures/*.txt` form). Check what HTTP/HTML crates are already vendored before adding deps.
+- Then site-format→schema inference (later).
+
+(Tasks: parser[x] encoder[x] cli/lib[x] round-trip[x] scraper[ ] infer[ ])
 
 ## Done this turn — commit `f21687c` (working tree clean)
 - **`.fit` encoder** `generator/src/fit/mod.rs`: `to_fit(&Workout) -> Result<Vec<u8>, Error>` (Error = `rustyfit::EncoderError<std::io::Error>`). 4 new tests; workspace 34 (18 core + 16 generator); clippy + fmt clean.

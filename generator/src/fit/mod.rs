@@ -64,8 +64,8 @@ fn workout_message(workout: &Workout, num_steps: usize) -> mesgdef::Workout {
     m.sport = typedef::Sport::SWIMMING;
     m.sub_sport = typedef::SubSport::LAP_SWIMMING;
     m.num_valid_steps = num_steps as u16;
-    m.wkt_name = workout.name.clone().unwrap_or_default();
-    m.wkt_description = workout.description.clone().unwrap_or_default();
+    m.wkt_name = fit_str(&workout.name.clone().unwrap_or_default());
+    m.wkt_description = fit_str(&workout.description.clone().unwrap_or_default());
     m.pool_length = meters_x100(workout.pool.length, workout.pool.unit) as u16;
     m.pool_length_unit = match workout.pool.unit {
         Unit::Meters => typedef::DisplayMeasure::METRIC,
@@ -79,8 +79,8 @@ fn workout_message(workout: &Workout, num_steps: usize) -> mesgdef::Workout {
 
 fn step_message(step: &FlatStep) -> mesgdef::WorkoutStep {
     let mut m = mesgdef::WorkoutStep::new();
-    m.wkt_step_name = step.name.clone().unwrap_or_default();
-    m.notes = step.notes.clone().unwrap_or_default();
+    m.wkt_step_name = fit_str(&step.name.clone().unwrap_or_default());
+    m.notes = fit_str(&step.notes.clone().unwrap_or_default());
     m.intensity = intensity(step.intensity);
     if let Some(t) = step.time {
         m.duration_type = typedef::WktStepDuration::TIME;
@@ -126,6 +126,20 @@ fn stroke_target(stroke: Option<Stroke>) -> Option<(typedef::WktStepTarget, u32)
         _ => return None,
     };
     Some((typedef::WktStepTarget::SWIM_STROKE, u32::from(value.0)))
+}
+
+/// Truncate `s` to fit a FIT `string` field (max 255 bytes incl. NUL).
+/// Cuts at a char boundary and never splits UTF-8.
+fn fit_str(s: &str) -> String {
+    const MAX: usize = 254;
+    if s.len() <= MAX {
+        return s.to_owned();
+    }
+    let mut end = MAX;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_owned()
 }
 
 /// FIT's distance unit for `value` pool units: meters × 100, with
@@ -302,5 +316,18 @@ mod tests {
             let got = (s.target_type.0 != u8::MAX).then_some(s.target_value);
             assert_eq!(got, expected(stroke), "stroke {stroke:?}");
         }
+    }
+
+    #[test]
+    fn long_strings_truncate_to_fit_limit() {
+        let mut w = sample();
+        match &mut w.sections[0].steps[0] {
+            Step::Distance(d) => d.notes = Some("n".repeat(300)),
+            other => panic!("got {other:?}"),
+        }
+        let fit = decode(&to_fit(&w).unwrap());
+        let s = mesgdef::WorkoutStep::from(&fit.messages[2]);
+        assert_eq!(s.notes.len(), 254);
+        assert_eq!(fit_str(&"é".repeat(200)).len(), 254);
     }
 }
