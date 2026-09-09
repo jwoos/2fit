@@ -19,4 +19,4 @@ cat workout.txt | 2fit-gen          # stdin → .fit on stdout
 
 ## Status
 
-WIP — see `prompt.md` for plan and tasks.
+WIP — see `documents/prompt.md` for plan and tasks.
