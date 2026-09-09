@@ -88,3 +88,44 @@ in the fixtures:
   `html-block` content div holds the notation.
 - Filters may be client-rendered (JS) — in that case fetch the listing with
   query params server-side and filter client-side in code.
+
+## Scraper implementation (turn 8, verified 2026-09-08)
+
+Implemented in `scraper/` (`fit_scraper` lib + `2fit-scrape` bin) on the
+**Squarespace RSS feed** (`/workouts?format=rss`), not HTML scraping:
+
+- **Listing**: `Swimdojo::list(ListFilter { tag, author, limit, query })`.
+  `?tag=` (exact match — `?tag=IM` returns IM workouts; `?tag=Triathlon`
+  returns 15 open-water/tri items) and `?author=<id>` compose server-side
+  and were verified live combined with `?offset=`. `query` and `limit`
+  apply client-side from title/description/tags. 20 items per page.
+- **Pagination**: `?offset=<epoch-ms>` is a cursor — items *older* than the
+  cursor. Verified: cursor `1616177804000` (= Telescope Octopus's pubDate
+  as ms) returns exactly the listing page's `?offset=1616177804713`
+  items (`CURSORS_IDENTICAL`), so the code skips items with
+  `published <= cursor` and sleeps 1 s between pages.
+- **Body**: each feed item's `content:encoded` is normalized by
+  `normalize_body` (drop `<figure>` media blocks, take `<p>`+`<li>`+`<h3>`
+  blocks, skip the links boilerplate, `<br>`→newline, unwrap tags,
+  unescape entities incl. `&nbsp;`, cut after `TOTAL:`). Verified on 68
+  unique items: text after the first `<figure` is always creature writeup
+  or captions (Bobtail Squid's caption-less photo and Pacific Spiny
+  Lumpsucker's stray caption are safely dropped); only Hourglass Dolphin
+  (open-water, `h3`+`ul`) lacks a boilerplate para and has no `TOTAL:`.
+  Fixture check: box-crab + sea-otter byte-exact, goblin-shark modulo the
+  site's `'` vs the fixture's hand-normalized `'`.
+- **Detail fallback**: `Swimdojo::fetch` reads the first
+  `div.sqs-html-content` inside `div[data-layout-label="Post Body"]`
+  (depth-counted div scan; live `fetch 2021/2/16/box-crab` is
+  byte-identical to the fixture and pipes into `2fit-gen` → 1298-byte
+  `.fit`). Fixes a real bug found live: byte-index div scanning panicked
+  on multi-byte `—`; now advances by `char::len_utf8`.
+- **Deps** (workspace): `ureq 3` (blocking, rustls default; `Agent` with
+  browser UA + 10 s timeout), `rss 2` (feed parse; author via Dublin Core
+  `creator`, date via RFC 2822 `pubDate`), `chrono 0.4` (date parse),
+  `html-escape 0.2` (entity decode). Offline fixtures in
+  `scraper/tests/data/` (`feed.xml` 20 items, `detail-goblin-shark.html`,
+  `raw-{goblin-shark,box-crab,sea-otter,hourglass-dolphin}.html`) so
+  `cargo test` needs no network.
+- **robots.txt**: disallows `?tag=`/`?author=` for crawlers; `format=rss`
+  is *not* disallowed — the feed path was chosen partly for this reason.

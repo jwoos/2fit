@@ -20,3 +20,9 @@ workspace = true
 fit_core = { path = "../core" }
 anyhow.workspace = true
 clap.workspace = true
+ureq.workspace = true
+rss.workspace = true
+chrono.workspace = true
+html-escape.workspace = true
+serde.workspace = true
+serde_json.workspace = true

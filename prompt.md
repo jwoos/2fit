@@ -40,9 +40,22 @@ I want to work on a program which has two major components:
 
 OKAY TO EDIT BELOW THIS
 
-TURN: 7
+TURN: 8
 
-# Checkpoint (2026-09-09) — CLI + round-trip done; next: Scraper
+# Checkpoint (2026-09-08) — Scraper done (RSS feed); next: schema inference
+
+## Done this turn — uncommitted (working tree has these changes)
+- **Scraper** `scraper/` on the Squarespace RSS feed (`/workouts?format=rss`): `Swimdojo::list(ListFilter{tag,author,limit,query})` with `?tag=`/`?author=` server-side (verified exact-match + composable with `?offset=` cursor; 20/page, `published<=cursor` skip, 1 s politeness) and query/limit client-side; `normalize_body` (feed `content:encoded` → notation; box/sea-otter byte-exact vs fixtures, goblin modulo `'`/`'`) incl. `<li>`/`<h3>` for the open-water outlier (Hourglass Dolphin); `fetch` detail fallback via Post-Body content div (live box-crab fetch ≡ fixture, pipes to `2fit-gen` → 1298 B `.fit`). Deps: `ureq 3` + `rss 2` + `chrono 0.4` + `html-escape 0.2`. 6 scraper tests (5 lib incl. offline `tests/data/` snapshots: feed.xml, detail page, 4 body HTMLs + 1 CLI test). Fixed live-found non-ASCII panic in the div scanner (advance by `len_utf8`).
+- `documents/swimdojo-site.md`: appended verified implementation notes (feed params, pagination, body rules, robots: `?tag=`/`?author=` disallowed, `format=rss` not).
+- Workspace: 44 tests, clippy + fmt clean. Live-verified: `list --limit 3`, `list --tag Triathlon --limit 3`, `fetch 2021/2/16/box-crab`.
+
+## Pick up next: schema inference (the remaining scraper spec item)
+- Spec: "infer a workout format from a site, generating a schema for the generator to consume" (Generator spec 7: "Store workout formats as schemas"). Scaffolding exists: `scraper/src/schema/mod.rs` is still a stub doc-comment; `site` trait (`Site`/`ListingItem`/`ScrapedWorkout`/`ListFilter`) is the extensibility seam for future sites.
+- Open design question (no code yet): what a "schema" is — JSON grammar for the parser? IDL validation rules? Decide with data from the notation variants in `documents/swimdojo-grammar.txt` before building.
+
+(Tasks: parser[x] encoder[x] cli/lib[x] round-trip[x] scraper[x] infer[ ])
+
+## Done this turn — commit `21a0f58` (turn 7: CLI + round-trip)
 
 ## Done this turn — uncommitted (working tree has these changes)
 - **`2fit-gen` CLI** `generator/src/main.rs` (~140 lines): clap-derive args `-f/--file` (default/`-` = stdin), `-o/--out` (default stdout), `--pool <Nyd|Nm>` (default `25yd`), `--base <m:ss|:ss|secs>` (optional). Errors via `anyhow` → stderr + non-zero exit. 2 unit tests (`pools`, `bases`). Smoke-tested: all 3 fixtures encode (goblin 1719 B, box-crab 1298 B, sea-otter 797 B); stdin ≡ file output.
