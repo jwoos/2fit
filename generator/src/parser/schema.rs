@@ -67,6 +67,44 @@ pub fn swimdojo() -> FormatSchema {
     }
 }
 
+/// The myswimpro.com notation schema.
+///
+/// Divergences from swimdojo, evidenced by 10 `Workout of the Week`
+/// articles (see `scraper/tests/data/msp-*.html` + `documents/myswimpro.md`):
+/// section labels (`Warmup`, `Pre-Set`, `Main Set`, `Cool Down`, plus
+/// drill/set sub-sections like `Kick & Drill`, `IM Set`, `Scull Set`);
+/// stroke-adjacent words (`kick`, `pull`, `drill` — kept as notes, since
+/// the IDL has no equipment word); extra drill nouns (`scull`, `drills`);
+/// a `×` (U+00D7) count separator alongside ` x `; rest spelled `rest`
+/// with companions the parser keeps as notes.
+pub fn myswimpro() -> FormatSchema {
+    let base = swimdojo();
+    FormatSchema {
+        name: "myswimpro".to_owned(),
+        section_labels: vec![
+            ("warmup".to_owned(), SectionLabel::WarmUp),
+            ("warm up".to_owned(), SectionLabel::WarmUp),
+            ("pre-set".to_owned(), SectionLabel::Main),
+            ("pre set".to_owned(), SectionLabel::Main),
+            ("main set".to_owned(), SectionLabel::Main),
+            ("main".to_owned(), SectionLabel::Main),
+            ("cool down".to_owned(), SectionLabel::CoolDown),
+            ("cooldown".to_owned(), SectionLabel::CoolDown),
+            ("post-main".to_owned(), SectionLabel::Main),
+        ],
+        drill_words: vec![
+            "bob".to_owned(),
+            "bobs".to_owned(),
+            "scull".to_owned(),
+            "sculls".to_owned(),
+            "drill".to_owned(),
+            "drills".to_owned(),
+        ],
+        count_separator: "×".to_owned(),
+        ..base
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +139,31 @@ mod tests {
             fit_core::Step::Repeat(r) => assert_eq!(r.count, 4),
             other => panic!("got {other:?}"),
         }
+    }
+
+    const MSP_1800: &str = include_str!("../../../documents/myswimpro-fixtures/1800-variety.txt");
+    const MSP_COMEBACK: &str =
+        include_str!("../../../documents/myswimpro-fixtures/comeback-1200.txt");
+    const MSP_USRPT: &str = include_str!("../../../documents/myswimpro-fixtures/usrpt-1500.txt");
+    const MSP_SCULL: &str = include_str!("../../../documents/myswimpro-fixtures/scull-1250.txt");
+
+    #[test]
+    fn myswimpro_schema_parses_site_fixtures() {
+        let schema = myswimpro();
+        let pool = fit_core::Pool::meters25();
+        for text in [MSP_1800, MSP_COMEBACK, MSP_USRPT, MSP_SCULL] {
+            let w = super::super::swimdojo::parse_with_schema(text, pool, None, &schema)
+                .expect("myswimpro fixture parses");
+            assert!(!w.flat_steps().is_empty());
+        }
+        // `×` separator, `s`-suffixed distances, drill nouns.
+        let w = super::super::swimdojo::parse_with_schema(
+            "Warmup\n4×50 Kick @ 1:10\n4 x 25s Freestyle @ :30\n",
+            pool,
+            None,
+            &schema,
+        )
+        .unwrap();
+        assert_eq!(w.flat_steps().len(), 8);
     }
 }

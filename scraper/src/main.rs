@@ -1,13 +1,25 @@
-//! `2fit-scrape`: list and fetch swimdojo workouts as normalized text.
+//! `2fit-scrape`: list and fetch swim workouts as normalized text.
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
-use fit_scraper::site::{ListFilter, Site, Swimdojo};
+use clap::{Parser, Subcommand, ValueEnum};
+use fit_scraper::site::{ListFilter, Myswimpro, Site, Swimdojo};
 
-/// Scrape swim workouts from swimdojo.com (via its RSS feed).
+/// Which workout site to scrape.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SiteKind {
+    /// swimdojo.com (Squarespace RSS feed).
+    Swimdojo,
+    /// myswimpro.com blog (WordPress API, Workout-of-the-Week).
+    Myswimpro,
+}
+
+/// Scrape swim workouts (swimdojo.com or myswimpro.com blog).
 #[derive(Debug, Parser)]
 #[command(name = "2fit-scrape", version)]
 struct Args {
+    /// Which site to scrape.
+    #[arg(long, value_enum, default_value = "swimdojo")]
+    site: SiteKind,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -16,10 +28,10 @@ struct Args {
 enum Cmd {
     /// List workouts (title + URL + summary).
     List {
-        /// Match the site's tag label exactly (e.g. `IM`, `Triathlon`).
+        /// Match the site's tag label exactly (swimdojo e.g. `IM`).
         #[arg(long)]
         tag: Option<String>,
-        /// Match the site's author id (e.g. `5aa560f75ce350fbdd62294b`).
+        /// Match the site's author id (swimdojo e.g. `5aa560f75ce350fbdd62294b`).
         #[arg(long)]
         author: Option<String>,
         /// Free-text match against title/description/tags.
@@ -31,7 +43,7 @@ enum Cmd {
     },
     /// Fetch one workout page as normalized notation text.
     Fetch {
-        /// Workout page URL (or slug from `list`).
+        /// Workout page URL (or site-local slug from `list`).
         url: String,
     },
     /// Infer a workout-format schema from sample notation files.
@@ -46,7 +58,6 @@ enum Cmd {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let site = Swimdojo::new();
     match args.cmd {
         Cmd::List {
             tag,
@@ -54,19 +65,25 @@ fn main() -> Result<()> {
             query,
             limit,
         } => {
-            let items = site.list(&ListFilter {
+            let filter = ListFilter {
                 tag,
                 author,
                 query,
                 limit,
-            })?;
+            };
+            let items = match args.site {
+                SiteKind::Swimdojo => Swimdojo::new().list(&filter)?,
+                SiteKind::Myswimpro => Myswimpro::new().list(&filter)?,
+            };
             for i in items {
                 println!("{}\n  {}\n", i.title, i.url);
             }
         }
         Cmd::Fetch { url } => {
-            let url = normalize_url(&url);
-            let w = site.fetch(&url)?;
+            let w = match args.site {
+                SiteKind::Swimdojo => Swimdojo::new().fetch(&normalize_swimdojo(&url))?,
+                SiteKind::Myswimpro => Myswimpro::new().fetch(&url)?,
+            };
             print!("{}", w.body);
         }
         Cmd::Schema { files, name } => {
@@ -93,7 +110,7 @@ fn main() -> Result<()> {
 }
 
 /// Accept a bare slug (or `/workouts/…` path) as shorthand for the full URL.
-fn normalize_url(url: &str) -> String {
+fn normalize_swimdojo(url: &str) -> String {
     if url.starts_with("http") {
         return url.to_owned();
     }
@@ -111,15 +128,15 @@ mod tests {
     #[test]
     fn url_shorthands() {
         assert_eq!(
-            normalize_url("https://www.swimdojo.com/workouts/2021/2/16/box-crab"),
+            normalize_swimdojo("https://www.swimdojo.com/workouts/2021/2/16/box-crab"),
             "https://www.swimdojo.com/workouts/2021/2/16/box-crab"
         );
         assert_eq!(
-            normalize_url("2021/2/16/box-crab"),
+            normalize_swimdojo("2021/2/16/box-crab"),
             "https://www.swimdojo.com/workouts/2021/2/16/box-crab"
         );
         assert_eq!(
-            normalize_url("/workouts/2021/2/16/box-crab"),
+            normalize_swimdojo("/workouts/2021/2/16/box-crab"),
             "https://www.swimdojo.com/workouts/2021/2/16/box-crab"
         );
     }

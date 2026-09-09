@@ -200,17 +200,36 @@ fn top(votes: BTreeMap<String, usize>) -> String {
 }
 
 /// `Warm Up`, `Main Set`, `Set N`, `Warm Down` / `Cool Down` (and their
-/// `:`-suffixed forms) — the same labels the parser recognizes.
+/// `:`-suffixed forms) — plus the myswimpro variants proven by the second
+/// site (`Warmup`, `Pre-Set`, `Post-Main`, drill/set sub-sections, repeat
+/// suffixes like `Main Set (3x)` / `IM Set (x2)`). Unknown `X Set` / drill
+/// headings map to `Main` (a totaled group, like swimdojo's `Set N`).
 fn classify_label(low: &str) -> Option<(String, SectionLabel)> {
-    let bare = low.trim_end_matches([':', ' ']).to_owned();
+    // Strip a repeat suffix first: `main set (3x)` → `main set`.
+    let bare = low
+        .split('(')
+        .next()
+        .unwrap_or(low)
+        .trim_end_matches([':', ' '])
+        .to_owned();
     let label = match bare.as_str() {
         "warm up" | "warmup" => SectionLabel::WarmUp,
         "warm down" | "cool down" | "cooldown" => SectionLabel::CoolDown,
-        "main set" | "main" => SectionLabel::Main,
-        _ => bare
-            .strip_prefix("set ")
-            .and_then(|rest| rest.trim().parse::<u32>().ok())
-            .map(SectionLabel::Set)?,
+        "main set" | "main" | "pre-set" | "pre set" | "post-main" => SectionLabel::Main,
+        _ => {
+            if let Some(n) = bare
+                .strip_prefix("set ")
+                .and_then(|rest| rest.trim().parse::<u32>().ok())
+            {
+                SectionLabel::Set(n)
+            } else if !bare.chars().any(|c| c.is_ascii_digit())
+                && ["set", "drill"].iter().any(|w| bare.ends_with(w))
+            {
+                SectionLabel::Main
+            } else {
+                return None;
+            }
+        }
     };
     Some((bare, label))
 }
@@ -316,6 +335,20 @@ fn observe_step(
     };
     let tokens: Vec<String> = left
         .split_whitespace()
+        .flat_map(|t| {
+            // `4×50` / `5x60m`: split spaceless counts into count +
+            // distance tokens so `×`-separated sites vote correctly.
+            let t = t.trim_matches(|c: char| !c.is_alphanumeric());
+            match t.find(['×', 'x']) {
+                Some(i)
+                    if t[..i].chars().all(|c| c.is_ascii_digit())
+                        && t[i + 1..].starts_with(|c: char| c.is_ascii_digit()) =>
+                {
+                    vec![t[..i].to_owned(), t[i + 1..].to_owned()]
+                }
+                _ => vec![t.to_ascii_lowercase()],
+            }
+        })
         .map(|t| {
             t.trim_matches(|c: char| !c.is_alphanumeric())
                 .to_ascii_lowercase()
@@ -349,11 +382,13 @@ fn observe_step(
     if whole.iter().any(|w| w == "rest") {
         // `30 seconds rest`: every non-number token is a rest word. The
         // Sea Otter summary `9 x 50 @ :20 rest:` carries its companions
-        // after the `@`, scanned in `whole` above.
+        // after the `@`, scanned in `whole` above. Drop tokens with
+        // digits (`5x60m`, ranges like `15-30` split into `15`/`30` —
+        // already filtered — but joined forms survive) and link boiler.
         rests.extend(
             whole
                 .iter()
-                .filter(|w| *w != "link" && *w != "here")
+                .filter(|w| !w.chars().any(|c| c.is_ascii_digit()) && *w != "link" && *w != "here")
                 .cloned(),
         );
         rests.insert("rest".to_owned());
@@ -414,8 +449,8 @@ fn observe_words(
         ("imedley", Stroke::IM),
         ("stroke", Stroke::Any),
     ];
-    const KNOWN_FREESTYLE: [&str; 2] = ["free", "swim"];
-    const KNOWN_DRILLS: [&str; 4] = ["bob", "bobs", "scull", "sculls"];
+    const KNOWN_FREESTYLE: [&str; 3] = ["free", "freestyle", "swim"];
+    const KNOWN_DRILLS: [&str; 6] = ["bob", "bobs", "scull", "sculls", "drill", "drills"];
     for w in words {
         if let Some((_, s)) = KNOWN_STROKES.iter().find(|(k, _)| k == w) {
             strokes.entry(w.clone()).or_insert(*s);

@@ -197,7 +197,7 @@ impl From<&rss::Item> for ListingItem {
 }
 
 /// Client-side free-text match over title/description/tags.
-fn matches_query(item: &ListingItem, query: &str) -> bool {
+pub fn matches_query(item: &ListingItem, query: &str) -> bool {
     let q = query.to_ascii_lowercase();
     item.title.to_ascii_lowercase().contains(&q)
         || item
@@ -231,17 +231,11 @@ pub fn normalize_body(html: &str) -> String {
         None => html,
     };
     let mut out = Vec::new();
-    for block in paragraphs(pre) {
+    for block in blocks(pre) {
         if block.contains("How To Read a Workout") {
             continue;
         }
-        let mut text = block.replace("<br />", "\n").replace("<br/>", "\n");
-        text = text.replace("<br>", "\n");
-        text = strip_tags(&text);
-        let text = html_escape::decode_html_entities(&text)
-            .replace('\u{a0}', " ")
-            .trim()
-            .to_owned();
+        let text = clean_block(&block);
         if !text.is_empty() {
             out.push(text);
         }
@@ -266,20 +260,56 @@ pub fn normalize_body(html: &str) -> String {
     body
 }
 
-/// Inner HTML of each text block, in order: `<p>` paragraphs plus `<li>`
-/// items (open-water workouts such as Hourglass Dolphin put drill bullets
-/// in a `<ul>`; pool workouts are `<p>`-only). `<h3>` headings are kept as
-/// their own line so the body preserves section structure.
-fn paragraphs(html: &str) -> Vec<String> {
-    blocks(html, "p")
-        .into_iter()
-        .chain(blocks(html, "li"))
-        .chain(blocks(html, "h3"))
-        .collect()
+/// Inner HTML of every text block in document order: `<p>` paragraphs,
+/// `<li>` items, and headings (`h1`–`h6`). Shared with the myswimpro
+/// normalizer, which keys on headings + list items. Order is document
+/// order (each block tagged with its source offset), not grouped by tag —
+/// myswimpro interleaves `<p>` headings with `<li>` steps.
+pub fn blocks(html: &str) -> Vec<String> {
+    let mut found: Vec<(usize, String)> = Vec::new();
+    for tag in ["p", "li", "h1", "h2", "h3", "h4", "h5", "h6"] {
+        let close = format!("</{tag}>");
+        let open = format!("<{tag}");
+        let mut rest = html;
+        let mut base = 0;
+        while let Some(rel) = rest.find(open.as_str()) {
+            let start = base + rel;
+            let after_tag = match rest[rel..].find('>') {
+                Some(i) => rel + i + 1,
+                None => break,
+            };
+            let abs_after = base + after_tag;
+            match rest[after_tag..].find(close.as_str()) {
+                Some(i) => {
+                    found.push((start, rest[after_tag..after_tag + i].to_owned()));
+                    let next = after_tag + i + close.len();
+                    base += next;
+                    rest = &rest[next..];
+                    let _ = abs_after;
+                }
+                None => break,
+            }
+        }
+    }
+    found.sort_by_key(|(pos, _)| *pos);
+    found.into_iter().map(|(_, b)| b).collect()
+}
+
+/// Clean one block's inner HTML to plain text: `<br>` → newline, tags
+/// unwrapped, entities unescaped, `&nbsp;` → space.
+pub fn clean_block(block: &str) -> String {
+    let mut text = block.replace("<br />", "\n").replace("<br/>", "\n");
+    text = text.replace("<br>", "\n");
+    text = strip_tags(&text);
+    html_escape::decode_html_entities(&text)
+        .replace('\u{a0}', " ")
+        .trim()
+        .to_owned()
 }
 
 /// Inner HTML of each `<tag>…</tag>` block, in document order.
-fn blocks(html: &str, tag: &str) -> Vec<String> {
+#[allow(dead_code)]
+fn blocks_of(html: &str, tag: &str) -> Vec<String> {
     let close = format!("</{tag}>");
     let mut out = Vec::new();
     let mut rest = html;
@@ -299,7 +329,7 @@ fn blocks(html: &str, tag: &str) -> Vec<String> {
 }
 
 /// Remove `<…>` tags, keeping inner text (links, `<em>`, `<strong>`).
-fn strip_tags(s: &str) -> String {
+pub fn strip_tags(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_tag = false;
     for c in s.chars() {

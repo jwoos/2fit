@@ -303,6 +303,9 @@ fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Resul
     let first = toks
         .next()
         .ok_or_else(|| err(n, line, "expected a distance"))?;
+    // Unit-suffixed distances (`60m`, `50s`): strip one trailing length
+    // letter; the pool supplies the unit, `s` is drill shorthand.
+    let first = first.strip_suffix(['m', 'M', 's']).unwrap_or(first);
     let value = numeric(first)
         .ok_or_else(|| err(n, line, format!("expected a distance, got '{first}'")))?;
     let rest: Vec<&str> = toks.collect();
@@ -327,14 +330,16 @@ fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Resul
         }));
     }
 
-    let rest_word = schema
-        .rest_words
-        .first()
-        .map(String::as_str)
-        .unwrap_or("rest");
-    let inner: Step = if lower.iter().any(|t| t == rest_word)
-        // `30 seconds rest` — a rest step, not a swim. Every non-number
-        // token must be a schema rest word.
+    // Rest detection: the step must *be* a rest prescription (`30 seconds
+    // rest`), not merely mention rest words. `lower` holds only the
+    // post-distance tokens, so require every one to be rest vocabulary
+    // *and* the literal `rest` token to be present: `300 Freestyle ...`
+    // has `lower` = [`freestyle`] — no `rest` token, so it stays a swim
+    // even when an inferred schema lists `freestyle` as a rest companion
+    // (from `5x60m Freestyle, 15-30 seconds rest` evidence). The marker is
+    // the literal word `rest`, not `rest_words[0]` (unordered after
+    // inference — BTreeSet order put `freestyle` first here).
+    let inner: Step = if lower.iter().any(|t| t == "rest")
         && lower
             .iter()
             .all(|t| schema.rest_words.iter().any(|w| w == t))
@@ -405,21 +410,43 @@ fn split_arrow<'a>(
     line
 }
 
-/// Peel an `N x ` / `Nx` count prefix, e.g. `4 x 100` → `(4, "100")`.
+/// Peel an `N x ` / `Nx` / `N×M` count prefix, e.g. `4 x 100` → `(4, "100")`.
+/// The schema's separator is tried first (` x ` for swimdojo, `×` for
+/// myswimpro); spaceless `Nx` and `N×M` forms always work.
 fn split_count<'a>(body: &'a str, schema: &FormatSchema) -> (Option<u32>, &'a str) {
     if let Some((n, rest)) = body.split_once(schema.count_separator.as_str())
         && let Some(count) = numeric(n)
     {
         return (Some(count), rest.trim_start());
     }
+    for sep in [" x ", "×", "x"] {
+        if sep == schema.count_separator {
+            continue;
+        }
+        if let Some((n, rest)) = body.split_once(sep)
+            && let Some(count) = numeric(n)
+        {
+            // ` x `/`×` need nothing more; bare `x` must not split words
+            // (`6×50` is fine, `max effort` is not a count).
+            if sep != "x" || rest.starts_with(char::is_whitespace) || n.contains('×') {
+                return (Some(count), rest.trim_start());
+            }
+        }
+    }
     if let Some(pos) = body.find(['x', '×']) {
         let (head, tail) = body.split_at(pos);
-        if head.chars().all(|c: char| c.is_ascii_digit())
-            && !head.is_empty()
-            && tail.starts_with(char::is_whitespace)
-            && let Some(count) = numeric(head)
-        {
-            return (Some(count), body[pos + 1..].trim_start());
+        // Spaceless `NxM` (`5x60m`): the distance may carry a unit suffix.
+        let head_digits = head.chars().all(|c: char| c.is_ascii_digit()) && !head.is_empty();
+        if head_digits && let Some(count) = numeric(head) {
+            let after = tail[1..].trim_start();
+            // `5x60m …` → distance token `60m` (suffix stripped below);
+            // `3x through:` has no digit after `x` → not a count.
+            if after.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                return (Some(count), after);
+            }
+            if tail.starts_with(char::is_whitespace) {
+                return (Some(count), body[pos + 1..].trim_start());
+            }
         }
     }
     (None, body)
