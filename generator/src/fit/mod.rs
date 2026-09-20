@@ -20,9 +20,9 @@ use std::io::Cursor;
 use embedded_io_adapters::std::FromStd;
 use fit_core::{FlatStep, Intensity, Stroke, Unit, Workout};
 use rustyfit::{
-    profile::{mesgdef, typedef},
-    proto::{Message, FIT},
     Encoder,
+    profile::{mesgdef, typedef},
+    proto::{FIT, Message},
 };
 
 /// Error from encoding a [`Workout`] into .fit bytes (std io backend).
