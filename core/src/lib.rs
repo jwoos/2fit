@@ -18,14 +18,20 @@ pub enum Unit {
     Yards,
     /// Meters (metric pools, e.g. 50-m pools).
     Meters,
+    /// Kilometers (run distances, e.g. Higdon `4.8 km run`).
+    Kilometers,
+    /// Miles (run distances, e.g. Higdon `3 mi run`).
+    Miles,
 }
 
 impl Unit {
-    /// Short abbreviation used in display strings (`yd`, `m`).
+    /// Short abbreviation used in display strings (`yd`, `m`, `km`, `mi`).
     pub const fn abbreviation(self) -> &'static str {
         match self {
             Unit::Yards => "yd",
             Unit::Meters => "m",
+            Unit::Kilometers => "km",
+            Unit::Miles => "mi",
         }
     }
 }
@@ -59,6 +65,22 @@ impl Distance {
         Self {
             value,
             unit: Unit::Meters,
+        }
+    }
+
+    /// A distance in kilometers.
+    pub const fn kilometers(value: u32) -> Self {
+        Self {
+            value,
+            unit: Unit::Kilometers,
+        }
+    }
+
+    /// A distance in miles.
+    pub const fn miles(value: u32) -> Self {
+        Self {
+            value,
+            unit: Unit::Miles,
         }
     }
 
@@ -954,6 +976,8 @@ mod tests {
     fn distance_and_pool_display() {
         assert_eq!(Distance::meters(200).to_string(), "200 m");
         assert_eq!(Distance::yards(100).to_string(), "100 yd");
+        assert_eq!(Distance::kilometers(5).to_string(), "5 km");
+        assert_eq!(Distance::miles(3).to_string(), "3 mi");
         let pool = Pool::meters50();
         assert_eq!(pool.dist(400), Distance::meters(400));
         assert_eq!(pool.to_string(), "50-m pool");

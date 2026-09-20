@@ -20,9 +20,9 @@ use std::io::Cursor;
 use embedded_io_adapters::std::FromStd;
 use fit_core::{FlatStep, Intensity, Stroke, Unit, Workout};
 use rustyfit::{
-    Encoder,
     profile::{mesgdef, typedef},
-    proto::{FIT, Message},
+    proto::{Message, FIT},
+    Encoder,
 };
 
 /// Error from encoding a [`Workout`] into .fit bytes (std io backend).
@@ -143,11 +143,15 @@ fn fit_str(s: &str) -> String {
 }
 
 /// FIT's distance unit for `value` pool units: meters × 100, with
-/// 1 yd = 0.9144 m (integer round). Saturates at `u32::MAX`.
+/// 1 yd = 0.9144 m, 1 mi = 1609.344 m (integer round). Saturates at `u32::MAX`.
 fn meters_x100(value: u32, unit: Unit) -> u32 {
     match unit {
         Unit::Meters => value.saturating_mul(100),
+        Unit::Kilometers => value.saturating_mul(100_000),
         Unit::Yards => ((value as u64 * 9_144 + 50) / 100)
+            .try_into()
+            .unwrap_or(u32::MAX),
+        Unit::Miles => ((value as u64 * 16_093_440 + 50) / 100)
             .try_into()
             .unwrap_or(u32::MAX),
         // A future unit is assumed to be meters (FIT's native distance
@@ -315,6 +319,30 @@ mod tests {
             let s = mesgdef::WorkoutStep::from(&fit.messages[2]);
             let got = (s.target_type.0 != u8::MAX).then_some(s.target_value);
             assert_eq!(got, expected(stroke), "stroke {stroke:?}");
+        }
+    }
+
+    #[test]
+    fn run_units_encode_as_meters() {
+        for (dist, want) in [
+            (Distance::kilometers(5), 500_000), // 5 km × 100
+            (Distance::miles(3), 482_803),      // 3 × 1609.344 m, rounded
+        ] {
+            let mut w = Workout::new(Pool::yards25());
+            w.sections.push(Section {
+                label: SectionLabel::None,
+                steps: vec![Step::Distance(DistanceStep {
+                    distance: dist,
+                    stroke: None,
+                    interval: None,
+                    intensity: Intensity::default(),
+                    notes: None,
+                })],
+                subtotal: None,
+            });
+            let fit = decode(&to_fit(&w).unwrap());
+            let s = mesgdef::WorkoutStep::from(&fit.messages[2]);
+            assert_eq!(s.duration_value, want, "distance {dist}");
         }
     }
 
