@@ -211,6 +211,60 @@ impl fmt::Display for Pool {
     }
 }
 
+// --- Targets ----------------------------------------------------------------
+
+// Evidence: `documents/run-bike-notation.md` §2 (interval formats carry
+// pace/power/HR/cadence targets; Higdon base format carries none) + FIT
+// `WktStepTarget` in rustyfit 0.10.2 (`SPEED=0`, `HEART_RATE=1`,
+// `CADENCE=3`, `POWER=4`, `SWIM_STROKE=11`). Swim mapping preserved:
+// `Target::Swim(stroke)` replaces `stroke: Option<Stroke>` (`None` =
+// freestyle default ⇒ `Swim(Free)`; `Any` stays omittable).
+// Units follow the FIT profile: pace as seconds per kilometer (speed
+// targets resolve to m/s × 1000 on encode), power in watts, cadence in
+// rpm, HR zones as zone numbers (device resolves zones from the
+// athlete's threshold; cf. TrainingPeaks one-threshold-per-sport model).
+
+/// A pace: seconds to cover one kilometer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Pace(pub Seconds);
+
+impl Pace {
+    /// Pace from seconds per kilometer.
+    pub const fn from_secs_per_km(secs: u32) -> Self {
+        Self(Seconds(secs))
+    }
+
+    /// Seconds per kilometer.
+    pub const fn as_secs_per_km(self) -> u32 {
+        self.0.0
+    }
+}
+
+impl fmt::Display for Pace {
+    /// `m:ss /km`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/km", self.0)
+    }
+}
+
+/// What effort a step is held to. `None` anywhere a `Target` is optional
+/// means "no target" (the Higdon base-format case).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum Target {
+    /// Swim stroke (replaces `stroke: Option<Stroke>`).
+    Swim(Stroke),
+    /// Pace target (run).
+    Pace(Pace),
+    /// Power target in watts (bike).
+    Power(u32),
+    /// Heart-rate zone number (device resolves bounds from threshold).
+    HrZone(u8),
+    /// Cadence target in rpm (bike).
+    Cadence(u8),
+}
+
 // --- Strokes ----------------------------------------------------------------
 
 /// A swimming stroke.
@@ -500,12 +554,31 @@ impl TechniqueStep {
     }
 }
 
+/// A time-based work step, e.g. `2 x 20:00 @ 250W` or a 30-minute easy run.
+///
+/// Run/bike work is often prescribed by duration rather than distance
+/// (`documents/run-bike-notation.md` §2); swim keeps `DistanceStep`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimedStep {
+    /// How long to work.
+    pub duration: Seconds,
+    /// What effort to hold. `None` = no target (Higdon base-format case).
+    pub target: Option<Target>,
+    /// Effort level of the step.
+    #[serde(default)]
+    pub intensity: Intensity,
+    /// Free-form notes.
+    pub notes: Option<String>,
+}
+
 /// One line of a workout, in any format that can be mapped to the IDL.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Step {
     /// A distance swum (possibly with stroke and interval).
     Distance(DistanceStep),
+    /// A duration worked at a target effort (run/bike).
+    Timed(TimedStep),
     /// A sequence repeated a number of times.
     Repeat(RepeatStep),
     /// A distance split across strokes.
@@ -523,10 +596,11 @@ pub enum Step {
 
 impl Step {
     /// Total distance this step contributes, in the step's own units
-    /// (0 for [`Step::Rest`]).
+    /// (0 for [`Step::Rest`], [`Step::Timed`], [`Step::Technique`]).
     pub fn distance_value(&self) -> u32 {
         match self {
             Step::Distance(s) => s.distance.value,
+            Step::Timed(_) => 0,
             Step::Repeat(r) => r.count * r.inner.iter().map(|s| s.distance_value()).sum::<u32>(),
             Step::Breakdown(b) => b.parts.iter().map(|p| p.distance.value).sum(),
             Step::Rest { .. } => 0,
@@ -579,6 +653,13 @@ impl Step {
             }
             Step::Rest { secs } => format!("{secs} rest"),
             Step::Recovery(r) => format!("{} easy", r.distance),
+            Step::Timed(t) => {
+                let mut out = t.duration.to_string();
+                if let Some(target) = &t.target {
+                    out.push_str(&format!(" @ {target}"));
+                }
+                out
+            }
             Step::Technique(t) => {
                 let mut out = String::new();
                 if let Some(sets) = t.sets {
@@ -608,6 +689,18 @@ impl Stroke {
             Stroke::Fly => "fly",
             Stroke::IM => "IM",
             Stroke::Any => "stroke",
+        }
+    }
+}
+
+impl fmt::Display for Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Target::Swim(s) => write!(f, "{s}"),
+            Target::Pace(p) => write!(f, "{p} pace"),
+            Target::Power(w) => write!(f, "{w}W"),
+            Target::HrZone(z) => write!(f, "Z{z}"),
+            Target::Cadence(rpm) => write!(f, "{rpm} rpm"),
         }
     }
 }
@@ -691,12 +784,16 @@ pub struct Workout {
 /// would be swum. This is what the .fit encoder consumes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FlatStep {
-    /// Set for swim steps.
+    /// Set for distance steps.
     pub distance: Option<Distance>,
-    /// Set for rest steps.
+    /// Set for rest steps and [`Step::Timed`] work.
     pub time: Option<Seconds>,
     /// Stroke, if known.
     pub stroke: Option<Stroke>,
+    /// Effort target (run/bike pace, power, HR zone, cadence).
+    /// `None` = no target.
+    #[serde(default)]
+    pub target: Option<Target>,
     /// Human-readable label (FIT `wkt_step_name`).
     pub name: Option<String>,
     /// Free-form notes (FIT `notes`).
@@ -778,6 +875,7 @@ impl Workout {
                             distance: Some(p.distance),
                             time: None,
                             stroke: Some(p.stroke),
+                            target: Some(Target::Swim(p.stroke)),
                             name: Some(p.to_string()),
                             notes: s.notes.clone(),
                             intensity: s.intensity,
@@ -789,9 +887,21 @@ impl Workout {
                     distance: Some(s.distance),
                     time: None,
                     stroke: s.stroke,
+                    target: s.stroke.map(Target::Swim),
                     name: Some(step.display()),
                     notes: s.notes.clone(),
                     intensity: s.intensity,
+                });
+            }
+            Step::Timed(t) => {
+                out.push(FlatStep {
+                    distance: None,
+                    time: Some(t.duration),
+                    stroke: None,
+                    target: t.target,
+                    name: Some(step.display()),
+                    notes: t.notes.clone(),
+                    intensity: t.intensity,
                 });
             }
             Step::Repeat(r) => {
@@ -807,6 +917,7 @@ impl Workout {
                             distance: None,
                             time: Some(rest),
                             stroke: None,
+                            target: None,
                             name: Some(format!("{rest} rest")),
                             notes: None,
                             intensity: Intensity::Rest,
@@ -831,6 +942,7 @@ impl Workout {
                         distance: Some(p.distance),
                         time: None,
                         stroke: Some(p.stroke),
+                        target: Some(Target::Swim(p.stroke)),
                         name: Some(p.to_string()),
                         notes: b.notes.clone(),
                         intensity: b.intensity,
@@ -842,6 +954,7 @@ impl Workout {
                     distance: None,
                     time: Some(*secs),
                     stroke: None,
+                    target: None,
                     name: Some(format!("{secs} rest")),
                     notes: None,
                     intensity: Intensity::Rest,
@@ -852,6 +965,7 @@ impl Workout {
                     distance: Some(r.distance),
                     time: None,
                     stroke: r.stroke,
+                    target: r.stroke.map(Target::Swim),
                     name: Some(format!("{} easy", r.distance)),
                     notes: r.notes.clone(),
                     intensity: Intensity::Recovery,
@@ -1340,6 +1454,66 @@ mod tests {
         let w = Workout::for_sport(Sport::Run);
         assert_eq!(w.pool, None);
         assert_eq!(w.total_distance(), None);
+    }
+
+    #[test]
+    fn timed_step_flattens_with_target() {
+        let mut w = Workout::for_sport(Sport::Bike);
+        w.sections.push(Section {
+            label: SectionLabel::Main,
+            steps: vec![
+                Step::Repeat(RepeatStep {
+                    count: 2,
+                    rest_between: None,
+                    inner: vec![Step::Timed(TimedStep {
+                        duration: Seconds::minutes(20),
+                        target: Some(Target::Power(250)),
+                        intensity: Intensity::Active,
+                        notes: None,
+                    })],
+                    notes: None,
+                }),
+                Step::Timed(TimedStep {
+                    duration: Seconds::minutes(5),
+                    target: None,
+                    intensity: Intensity::Recovery,
+                    notes: Some("spin".into()),
+                }),
+            ],
+            subtotal: None,
+        });
+        let flat = w.flat_steps();
+        assert_eq!(flat.len(), 3);
+        assert_eq!(flat[0].time, Some(Seconds::minutes(20)));
+        assert_eq!(flat[0].distance, None);
+        assert_eq!(flat[0].target, Some(Target::Power(250)));
+        assert_eq!(flat[2].target, None);
+        assert_eq!(flat[2].notes.as_deref(), Some("spin"));
+        assert_eq!(
+            Step::Timed(TimedStep {
+                duration: Seconds::minutes(20),
+                target: Some(Target::Power(250)),
+                intensity: Intensity::Active,
+                notes: None,
+            })
+            .display(),
+            "20:00 @ 250W"
+        );
+        assert_eq!(
+            Target::Pace(Pace::from_secs_per_km(300)).to_string(),
+            "5:00/km pace"
+        );
+        // Timed work adds no distance.
+        assert_eq!(
+            Step::Timed(TimedStep {
+                duration: Seconds::secs(60),
+                target: None,
+                intensity: Intensity::Active,
+                notes: None,
+            })
+            .distance_value(),
+            0
+        );
     }
 
     #[test]

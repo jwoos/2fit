@@ -18,7 +18,7 @@
 use std::io::Cursor;
 
 use embedded_io_adapters::std::FromStd;
-use fit_core::{FlatStep, Intensity, Sport, Stroke, Unit, Workout};
+use fit_core::{FlatStep, Intensity, Sport, Stroke, Target, Unit, Workout};
 use rustyfit::{
     Encoder,
     profile::{mesgdef, typedef},
@@ -106,10 +106,18 @@ fn step_message(step: &FlatStep) -> mesgdef::WorkoutStep {
     } else if let Some(d) = step.distance {
         m.duration_type = typedef::WktStepDuration::DISTANCE;
         m.duration_value = meters_x100(d.value, d.unit);
-        if let Some((target_type, target_value)) = stroke_target(step.stroke) {
-            m.target_type = target_type;
-            m.target_value = target_value;
-        }
+    }
+    // Targets apply to both distance and timed work (pace/power/HR on a
+    // `2 x 20:00 @ 250W` sets TIME duration + POWER target). Swim stroke
+    // targets come from `FlatStep.stroke` (legacy) or `Target::Swim`
+    // (preferred); `target` wins when both are set.
+    let swim_stroke = step.target.and_then(|t| match t {
+        Target::Swim(s) => Some(s),
+        _ => None,
+    });
+    if let Some((target_type, target_value)) = target(step.target, swim_stroke.or(step.stroke)) {
+        m.target_type = target_type;
+        m.target_value = target_value;
     }
     m
 }
@@ -125,6 +133,39 @@ fn intensity(i: Intensity) -> typedef::Intensity {
         Intensity::Other => typedef::Intensity::OTHER,
         // A future core intensity has no FIT code; other is the catch-all.
         _ => typedef::Intensity::OTHER,
+    }
+}
+
+/// The FIT target for a step: `(target_type, target_value)` when the
+/// target has a FIT code, else `None` (target omitted).
+///
+/// `target` (the `FlatStep.target`, set by `TimedStep` flattening and new
+/// code) wins over `stroke` (the legacy swim path); both feed the same
+/// `SWIM_STROKE` mapping. Scales (Garmin FIT profile): speed = m/s × 1000,
+/// power = watts, cadence = rpm, HR zone = zone number (device resolves
+/// bounds from the athlete's threshold).
+fn target(target: Option<Target>, stroke: Option<Stroke>) -> Option<(typedef::WktStepTarget, u32)> {
+    match target {
+        Some(Target::Swim(s)) => stroke_target(Some(s)),
+        Some(Target::Pace(p)) => {
+            let secs = p.as_secs_per_km();
+            if secs == 0 {
+                return None;
+            }
+            Some((
+                typedef::WktStepTarget::SPEED,
+                (1_000_000 / secs as u64).min(u32::MAX as u64) as u32,
+            ))
+        }
+        Some(Target::Power(w)) => Some((typedef::WktStepTarget::POWER, w)),
+        Some(Target::HrZone(z)) => Some((typedef::WktStepTarget::HEART_RATE, u32::from(z))),
+        Some(Target::Cadence(rpm)) => Some((typedef::WktStepTarget::CADENCE, u32::from(rpm))),
+        // `None` falls back to the legacy swim-stroke path; a future
+        // target variant has no FIT code, so omit rather than guess.
+        other => match other {
+            None => stroke_target(stroke),
+            Some(_) => None,
+        },
     }
 }
 
@@ -182,7 +223,8 @@ fn meters_x100(value: u32, unit: Unit) -> u32 {
 mod tests {
     use super::*;
     use fit_core::{
-        Distance, DistanceStep, IntervalSpec, Pool, Seconds, Section, SectionLabel, Step,
+        Distance, DistanceStep, IntervalSpec, Pool, RepeatStep, Seconds, Section, SectionLabel,
+        Step,
     };
     use rustyfit::Decoder;
 
@@ -379,6 +421,73 @@ mod tests {
                 assert_eq!(wm.pool_length, u16::MAX);
             }
         }
+    }
+
+    #[test]
+    fn timed_targets_round_trip() {
+        use fit_core::{Pace, TimedStep};
+        // `2 x 20:00 @ 250W` + `5:00 @ 5:00/km` + `3:00 @ Z4` + `2:00 @ 95rpm`.
+        let mut w = Workout::for_sport(Sport::Bike);
+        w.sections.push(Section {
+            label: SectionLabel::Main,
+            steps: vec![
+                Step::Repeat(RepeatStep {
+                    count: 2,
+                    rest_between: None,
+                    inner: vec![Step::Timed(TimedStep {
+                        duration: Seconds::minutes(20),
+                        target: Some(Target::Power(250)),
+                        intensity: Intensity::Active,
+                        notes: None,
+                    })],
+                    notes: None,
+                }),
+                Step::Timed(TimedStep {
+                    duration: Seconds::minutes(5),
+                    target: Some(Target::Pace(Pace::from_secs_per_km(300))),
+                    intensity: Intensity::Active,
+                    notes: None,
+                }),
+                Step::Timed(TimedStep {
+                    duration: Seconds::minutes(3),
+                    target: Some(Target::HrZone(4)),
+                    intensity: Intensity::Active,
+                    notes: None,
+                }),
+                Step::Timed(TimedStep {
+                    duration: Seconds::minutes(2),
+                    target: Some(Target::Cadence(95)),
+                    intensity: Intensity::Active,
+                    notes: None,
+                }),
+            ],
+            subtotal: None,
+        });
+        let flat = w.flat_steps();
+        assert_eq!(flat.len(), 5);
+        assert_eq!(flat[0].time, Some(Seconds::minutes(20)));
+        assert_eq!(flat[0].target, Some(Target::Power(250)));
+        assert_eq!(flat[0].distance, None);
+        let fit = decode(&to_fit(&w).unwrap());
+        let steps: Vec<mesgdef::WorkoutStep> = fit.messages[2..]
+            .iter()
+            .map(mesgdef::WorkoutStep::from)
+            .collect();
+        // All timed work encodes as TIME duration ...
+        for (s, secs) in steps.iter().zip([1200, 1200, 300, 180, 120]) {
+            assert_eq!(s.duration_type, typedef::WktStepDuration::TIME);
+            assert_eq!(s.duration_value, secs);
+        }
+        // ... with per-target types: POWER / SPEED / HEART_RATE / CADENCE.
+        assert_eq!(steps[0].target_type, typedef::WktStepTarget::POWER);
+        assert_eq!(steps[0].target_value, 250);
+        assert_eq!(steps[2].target_type, typedef::WktStepTarget::SPEED);
+        assert_eq!(steps[2].target_value, 1_000_000 / 300); // 5:00/km → m/s×1000
+        assert_eq!(steps[3].target_type, typedef::WktStepTarget::HEART_RATE);
+        assert_eq!(steps[3].target_value, 4);
+        assert_eq!(steps[4].target_type, typedef::WktStepTarget::CADENCE);
+        assert_eq!(steps[4].target_value, 95);
+        assert_eq!(w.num_valid_steps(), 5);
     }
 
     #[test]
