@@ -1,26 +1,35 @@
-# Checkpoint (2026-09-20) — Turn 10: multisport Phase 0 done; NEXT: Phase 1 Core IDL
+# Checkpoint (2026-09-20) — Turn 11: Phase 1 Core IDL done; NEXT: Phase 2 encoder per sport / CLI
 
-## Done — Phase 0 survey (no code)
+## Done — 3 atomic commits (all green: 60 tests, clippy + fmt clean)
 
-- **`documents/run-bike-notation.md`** (new): Hal Higdon Novice 1 marathon fetched
-  live — `<N> mi/km run` cells, bare long-run distances (unit from grid toggle),
-  `Rest`/`Cross` day markers (map to "no step", not `Step::Rest`). Midweek prose
-  carries effort ("easy", "MP-30..90s/mi") outside the cell text ⇒ base run format
-  has no per-step target; pace/power/HR targets live only in interval formats
-  (`8 x 400 @ 5k pace`, `2 x 20:00 @ 250W` — still to-confirm in Phase 3).
-- **FIT facts re-verified in rustyfit 0.10.2 source** (checkpoint's turn-9 claim
-  now evidenced): `Sport` RUNNING=1/CYCLING=2; `SubSport` GENERIC=0/STREET=2/
-  TRAIL=3/TRACK=4/ROAD=7/MOUNTAIN=8/INDOOR_CYCLING=6/INDOOR_RUNNING=45;
-  targets SPEED=0/HEART_RATE=1/CADENCE=3/POWER=4; durations TIME=0/DISTANCE=1.
-  Bonus finds: `WorkoutStep` already has `custom_target_value_low/high` +
-  secondary-target fields (pace/power ranges = mapping, no new message);
-  encoder wildcard arms over `#[non_exhaustive]` core enums ⇒ additive core
-  changes compile.
+- **`d15fc11` Unit Kilometers/Miles**: `Unit += Kilometers, Miles` (`km`/`mi`
+  abbreviations, `Distance::{kilometers,miles}`); encoder `meters_x100` handles
+  both (km×100_000, mi×160_934.4 round; 3 mi → 482_803). Round-trip test
+  `run_units_encode_as_meters`.
+- **`bf529c9` Sport + optional pool**: `Sport { Swim, Run, Bike }` (default Swim),
+  `Workout.sport` (`#[serde(default)]`, back-compat JSON), `Workout.pool: Option<Pool>`
+  (`Workout::new` sets `Some`; `Workout::for_sport` sets `None`),
+  `total_distance() -> Option<Distance>` (`None` pool-less). Encoder maps
+  swim→SWIMMING/LAP_SWIMMING, run→RUNNING/STREET, bike→CYCLING/ROAD; pool-less
+  leaves `pool_length(_unit)` at invalid sentinels (encoder omits them —
+  verified `pool_length_scaled() -> None` on `u16::MAX` + serializer skips).
+  Test `sport_sub_sport_per_sport` asserts codes + omission. Deferred:
+  `run_base`/`bike_ftp` (no parser produces pace/power yet — Phase 3).
+- **`0713617` Target + Timed**: `Pace(secs/km)` + `Target::{Swim,Pace,Power,HrZone,Cadence}`;
+  `Step::Timed { duration, target, intensity, notes }` (distance_value 0,
+  display `20:00 @ 250W`); `FlatStep.target` (swim flattening sets both
+  `stroke` and `target`; timed sets `target` only); encoder `target()` maps
+  Pace→SPEED m/s×1000, Power→POWER, HrZone→HEART_RATE, Cadence→CADENCE,
+  wins over legacy `stroke`. Tests: `timed_step_flattens_with_target` (core),
+  `timed_targets_round_trip` (encoder: 5 steps incl. 2×20:00@250W repeat).
+- Swim behavior unchanged: `Workout::dist` still panics only for pool-less
+  (swim parsers always set pool); legacy `stroke` path intact.
 
-## NEXT: Phase 1 — Core IDL (planned, no code yet)
+## NEXT: Phase 2 — Encoder per sport + CLI (planned, no code)
 
-Per turn-9 plan (unchanged): `Sport { Swim, Run, Bike }` + `Workout.sport`
-(default `Swim`); `Workout.pool → Option<Pool>`; `Unit += Kilometers, Miles`;
-`Step::Timed`; `stroke → target: Option<Target>`; `run_base`/`bike_ftp`.
-One commit per type; tests per commit. Run first (SPEED = smallest encoder
-delta), then bike (POWER/CADENCE).
+- Encoder is done for run/bike (this turn); remaining: round-trip tests per
+  sport mirroring the goblin test (swim covered, bike timed covered, run
+  distance+timed still thin) + `2fit-gen --sport run|bike|swim` (pool
+  swim-only, `--base` generalized to pace/FTP later).
+- Then Phase 3 (parser + schemas): unit suffixes `km`/`mi`/`k`, `schema::{run(),bike()}`,
+  fixtures, `infer` pace/power markers (verify before adding fields).

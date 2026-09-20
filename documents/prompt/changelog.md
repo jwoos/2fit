@@ -1,5 +1,6 @@
 # Changelog
 
+- Turn 11 (2026-09-20): Phase 1 Core IDL — `d15fc11` units, `bf529c9` sport/pool, `0713617` target/timed. See checkpoint.md for detail.
 - Turn 10 (2026-09-20): Multisport Phase 0 survey. See checkpoint.md for detail.
 
 - Turn 9 (2026-09-09): Schemas + inference (`7deb2a0`). See checkpoint.md for detail.
