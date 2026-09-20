@@ -18,7 +18,7 @@
 use std::io::Cursor;
 
 use embedded_io_adapters::std::FromStd;
-use fit_core::{FlatStep, Intensity, Stroke, Unit, Workout};
+use fit_core::{FlatStep, Intensity, Sport, Stroke, Unit, Workout};
 use rustyfit::{
     Encoder,
     profile::{mesgdef, typedef},
@@ -61,20 +61,38 @@ fn file_id() -> mesgdef::FileId {
 
 fn workout_message(workout: &Workout, num_steps: usize) -> mesgdef::Workout {
     let mut m = mesgdef::Workout::new();
-    m.sport = typedef::Sport::SWIMMING;
-    m.sub_sport = typedef::SubSport::LAP_SWIMMING;
+    m.sport = sport(workout.sport);
+    m.sub_sport = sub_sport(workout.sport);
     m.num_valid_steps = num_steps as u16;
     m.wkt_name = fit_str(&workout.name.clone().unwrap_or_default());
     m.wkt_description = fit_str(&workout.description.clone().unwrap_or_default());
-    m.pool_length = meters_x100(workout.pool.length, workout.pool.unit) as u16;
-    m.pool_length_unit = match workout.pool.unit {
-        Unit::Meters => typedef::DisplayMeasure::METRIC,
-        Unit::Yards => typedef::DisplayMeasure::STATUTE,
-        // A future unit has no known display measure; metric is FIT's
-        // native one.
-        _ => typedef::DisplayMeasure::METRIC,
-    };
+    if let Some(pool) = workout.pool {
+        m.pool_length = meters_x100(pool.length, pool.unit) as u16;
+        m.pool_length_unit = match pool.unit {
+            Unit::Meters | Unit::Kilometers => typedef::DisplayMeasure::METRIC,
+            Unit::Yards | Unit::Miles => typedef::DisplayMeasure::STATUTE,
+            _ => typedef::DisplayMeasure::METRIC,
+        };
+    }
     m
+}
+
+fn sport(sport: Sport) -> typedef::Sport {
+    match sport {
+        Sport::Swim => typedef::Sport::SWIMMING,
+        Sport::Run => typedef::Sport::RUNNING,
+        Sport::Bike => typedef::Sport::CYCLING,
+        _ => typedef::Sport::GENERIC,
+    }
+}
+
+fn sub_sport(sport: Sport) -> typedef::SubSport {
+    match sport {
+        Sport::Swim => typedef::SubSport::LAP_SWIMMING,
+        Sport::Run => typedef::SubSport::STREET,
+        Sport::Bike => typedef::SubSport::ROAD,
+        _ => typedef::SubSport::GENERIC,
+    }
 }
 
 fn step_message(step: &FlatStep) -> mesgdef::WorkoutStep {
@@ -319,6 +337,47 @@ mod tests {
             let s = mesgdef::WorkoutStep::from(&fit.messages[2]);
             let got = (s.target_type.0 != u8::MAX).then_some(s.target_value);
             assert_eq!(got, expected(stroke), "stroke {stroke:?}");
+        }
+    }
+
+    #[test]
+    fn sport_sub_sport_per_sport() {
+        for (sport, pool, want_sport, want_sub) in [
+            (
+                Sport::Swim,
+                Some(Pool::yards25()),
+                typedef::Sport::SWIMMING,
+                typedef::SubSport::LAP_SWIMMING,
+            ),
+            (
+                Sport::Run,
+                None,
+                typedef::Sport::RUNNING,
+                typedef::SubSport::STREET,
+            ),
+            (
+                Sport::Bike,
+                None,
+                typedef::Sport::CYCLING,
+                typedef::SubSport::ROAD,
+            ),
+        ] {
+            let mut w = Workout::for_sport(sport);
+            w.pool = pool;
+            w.sections.push(Section {
+                label: SectionLabel::None,
+                steps: vec![Step::Rest {
+                    secs: Seconds::secs(30),
+                }],
+                subtotal: None,
+            });
+            let fit = decode(&to_fit(&w).unwrap());
+            let wm = mesgdef::Workout::from(&fit.messages[1]);
+            assert_eq!(wm.sport, want_sport, "sport {sport:?}");
+            assert_eq!(wm.sub_sport, want_sub, "sport {sport:?}");
+            if pool.is_none() {
+                assert_eq!(wm.pool_length, u16::MAX);
+            }
         }
     }
 

@@ -140,6 +140,25 @@ impl fmt::Display for Seconds {
     }
 }
 
+// --- Sport ------------------------------------------------------------------
+
+// Evidence: `documents/run-bike-notation.md` (Higdon `mi`/`km` run cells) +
+// rustyfit 0.10.2 `profile/typedef/sport.rs` (RUNNING=1, CYCLING=2,
+// SWIMMING=5).
+
+/// The sport a workout is for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum Sport {
+    /// Pool swimming (default; preserves v1 behavior).
+    #[default]
+    Swim,
+    /// Running.
+    Run,
+    /// Cycling.
+    Bike,
+}
+
 // --- Pool -------------------------------------------------------------------
 
 /// The pool a workout is swum in. Pools in the US are generally 25-yd or
@@ -647,15 +666,20 @@ impl Section {
 
 // --- Workout ----------------------------------------------------------------
 
-/// A complete, parsed workout: metadata + pool + ordered sections.
+/// A complete, parsed workout: metadata + sport/pool + ordered sections.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workout {
     /// Workout name, if the source has one.
     pub name: Option<String>,
     /// Free-form description, if the source has one.
     pub description: Option<String>,
-    /// The pool the workout is written for.
-    pub pool: Pool,
+    /// The sport the workout is for (default [`Sport::Swim`]).
+    #[serde(default)]
+    pub sport: Sport,
+    /// The pool the workout is written for. `None` for run/bike workouts
+    /// (the encoder omits `pool_length`; rustyfit leaves it at its
+    /// invalid-sentinel default `u16::MAX`, which encodes as absent).
+    pub pool: Option<Pool>,
     /// The swimmer's base pace per 100 (pool units), if known. Required to
     /// resolve [`IntervalSpec::Base`]; see swimdojo "Bases".
     pub base100: Option<Seconds>,
@@ -683,28 +707,49 @@ pub struct FlatStep {
 }
 
 impl Workout {
-    /// A new workout for `pool` with no sections.
-    pub const fn new(pool: Pool) -> Self {
+    /// A new swim workout for `pool` with no sections.
+    pub fn new(pool: Pool) -> Self {
         Self {
             name: None,
             description: None,
-            pool,
+            sport: Sport::Swim,
+            pool: Some(pool),
             base100: None,
             sections: Vec::new(),
         }
     }
 
-    /// A `Distance` in this workout's pool units.
-    pub const fn dist(&self, value: u32) -> Distance {
-        Distance::in_pool(self.pool, value)
+    /// A new workout for `sport` with no sections and no pool. Swim
+    /// workouts should use [`Workout::new`] (which sets the pool); run/bike
+    /// workouts use this (`pool: None`).
+    pub fn for_sport(sport: Sport) -> Self {
+        Self {
+            name: None,
+            description: None,
+            sport,
+            pool: None,
+            base100: None,
+            sections: Vec::new(),
+        }
     }
 
-    /// Total distance of the whole workout, in pool units.
-    pub fn total_distance(&self) -> Distance {
-        Distance {
+    /// A `Distance` in this workout's pool units. Panics for pool-less
+    /// (run/bike) workouts, which carry explicit units per step instead.
+    /// The swim parsers always set a pool, so this is infallible there.
+    pub fn dist(&self, value: u32) -> Distance {
+        self.pool
+            .map(|p| Distance::in_pool(p, value))
+            .expect("pool-less workout has no dist unit")
+    }
+
+    /// Total distance of the whole workout, in pool units. `None` for
+    /// pool-less (run/bike) workouts, whose steps carry mixed units.
+    pub fn total_distance(&self) -> Option<Distance> {
+        let pool = self.pool?;
+        Some(Distance {
             value: self.sections.iter().map(Section::total_distance).sum(),
-            unit: self.pool.unit,
-        }
+            unit: pool.unit,
+        })
     }
 
     /// Expand all repeats and IMs into the ordered list of steps to swim.
@@ -1259,7 +1304,7 @@ mod tests {
             subtotal: None,
         });
         // 100 swum; the 3 x 10 bobs add 0 distance and 0 flat steps.
-        assert_eq!(w.total_distance(), Distance::yards(100));
+        assert_eq!(w.total_distance(), Some(Distance::yards(100)));
         let flat = w.flat_steps();
         assert_eq!(flat.len(), 1);
         assert_eq!(flat[0].distance, Some(Distance::yards(100)));
@@ -1280,7 +1325,21 @@ mod tests {
     fn total_distance_sums_sections_and_repeats() {
         let w = repeat_workout();
         // 2 throughs × (4×100 + 6×50) = 1400.
-        assert_eq!(w.total_distance(), Distance::yards(1400));
+        assert_eq!(w.total_distance(), Some(Distance::yards(1400)));
+    }
+
+    #[test]
+    fn sport_defaults_to_swim_with_pool() {
+        let w = Workout::new(Pool::yards25());
+        assert_eq!(w.sport, Sport::Swim);
+        assert_eq!(w.pool, Some(Pool::yards25()));
+    }
+
+    #[test]
+    fn pool_less_workout_has_no_total() {
+        let w = Workout::for_sport(Sport::Run);
+        assert_eq!(w.pool, None);
+        assert_eq!(w.total_distance(), None);
     }
 
     #[test]

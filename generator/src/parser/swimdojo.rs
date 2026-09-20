@@ -652,7 +652,7 @@ mod tests {
 
         assert_eq!(w.sections[2].label, SectionLabel::Set(2));
         assert_eq!(w.sections[2].steps.len(), 2);
-        assert_eq!(w.total_distance(), Distance::yards(6000));
+        assert_eq!(w.total_distance(), Some(Distance::yards(6000)));
     }
 
     #[test]
@@ -725,7 +725,7 @@ mod tests {
             other => panic!("expected repeat step, got {other:?}"),
         }
 
-        assert_eq!(w.total_distance(), Distance::yards(6000));
+        assert_eq!(w.total_distance(), Some(Distance::yards(6000)));
     }
 
     #[test]
@@ -793,7 +793,7 @@ mod tests {
         }
 
         // 100 + 100 + 0 (bobs) + 450 + 100 + 50 = the stated TOTAL: 800.
-        assert_eq!(w.total_distance(), Distance::yards(800));
+        assert_eq!(w.total_distance(), Some(Distance::yards(800)));
     }
 
     #[test]
