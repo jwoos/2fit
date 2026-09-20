@@ -1,5 +1,7 @@
 # Tasks
 
+- [x] Multisport Phase 0: survey run/bike notation → documents/run-bike-notation.md; verify FIT run/bike facts in rustyfit source
+
 - [x] Research swimdojo layout + notation grammar; extract grammar → documents/swimdojo-grammar.txt (was /tmp/sd-howto.txt, now persisted)
 - [x] Evaluate FIT crates (rustyfit vs fit-sdk-rust) → choose rustyfit v0.10.2
 - [x] Scaffold Cargo workspace (`core`, `generator`, `scraper`) + README

@@ -1,5 +1,7 @@
 # Changelog
 
+- Turn 10 (2026-09-20): Multisport Phase 0 survey. See checkpoint.md for detail.
+
 - Turn 9 (2026-09-09): Schemas + inference (`7deb2a0`). See checkpoint.md for detail.
 - Turn 8 (2026-09-08): Scraper on the Squarespace RSS feed (`9e9d968`). `Swimdojo::list(ListFilter{tag,author,limit,query})` with `?tag=`/`?author=` server-side (verified exact-match + composable with `?offset=` cursor; 20/page, `published<=cursor` skip, 1 s politeness) and query/limit client-side; `normalize_body` (feed `content:encoded` → notation; box/sea-otter byte-exact vs fixtures, goblin modulo `'`/`'`); `fetch` detail fallback via Post-Body content div (live box-crab fetch ≡ fixture, pipes to `2fit-gen` → 1298 B `.fit`). Deps: `ureq 3` + `rss 2` + `chrono 0.4` + `html-escape 0.2`. 6 scraper tests + 1 CLI test. Fixed live-found non-ASCII panic in the div scanner (advance by `len_utf8`).
 - Turn 7 (2026-09-09): CLI + round-trip (`21a0f58`). `2fit-gen`: `-f/--file` (default/`-` = stdin), `-o/--out` (default stdout), `--pool` (default `25yd`), `--base` (optional). Lib `parse_str` + `fit_core` re-export. Fixture round-trip test (goblin → `to_fit` → `Decoder`). Bug: sea-otter's concatenated notes (~305 B) exceeded FIT's 255 B string limit → `fit_str()` truncation at char boundary. 38 tests, clippy/fmt clean.
