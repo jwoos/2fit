@@ -271,7 +271,8 @@ mod tests {
                 .expect("zwift fixture parses");
             assert!(!w.flat_steps().is_empty());
         }
-        // `%FTP` / cadence targets stay notes in Phase 3 (no Target yet).
+        // Direct targets (`100W`, `95rpm`, `Z4`) resolve with no flags;
+        // `%`-thresholds need `--ftp`/`--run-base`, else stay notes.
         let w = super::super::swimdojo::parse_with_schema(
             "Warm Up\n1min @ 85rpm, 100W\n",
             pool,
@@ -282,8 +283,28 @@ mod tests {
         let flat = w.flat_steps();
         assert_eq!(flat.len(), 1);
         assert_eq!(flat[0].time, Some(fit_core::Seconds::minutes(1)));
+        // Last-wins: power beats cadence as the device's primary target;
+        // the cadence word stays in notes.
+        assert_eq!(
+            flat[0].target,
+            Some(fit_core::Target::Power(100)),
+            "{flat:?}"
+        );
         let notes = flat[0].notes.as_deref().unwrap_or("");
         assert!(notes.contains("85rpm"), "{notes:?}");
-        assert!(notes.contains("100W"), "{notes:?}");
+        // Threshold-gated: `%FTP` without `--ftp` stays notes, no target.
+        let w = super::super::swimdojo::parse_with_schema(
+            "Warm Up\n20min @ 110% FTP\n",
+            pool,
+            None,
+            &schema,
+        )
+        .unwrap();
+        let flat = w.flat_steps();
+        assert_eq!(flat[0].target, None);
+        assert!(
+            flat[0].notes.as_deref().unwrap_or("").contains("110%"),
+            "{flat:?}"
+        );
     }
 }

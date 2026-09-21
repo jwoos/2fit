@@ -30,8 +30,8 @@
 use std::fmt;
 
 use fit_core::{
-    Distance, DistanceStep, FormatSchema, IntervalSpec, Pool, RecoveryStep, RepeatStep, Seconds,
-    Section, SectionLabel, Step, Stroke, TechniqueStep, TimedStep, Workout,
+    Distance, DistanceStep, FormatSchema, IntervalSpec, Pace, Pool, RecoveryStep, RepeatStep,
+    Seconds, Section, SectionLabel, Step, Stroke, Target, TechniqueStep, TimedStep, Workout,
 };
 
 /// A line of notation that could not be parsed.
@@ -52,6 +52,17 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// Athlete thresholds for target resolution (mirrors [`Workout`]'s
+/// `run_base`/`bike_ftp`; passed separately so `parse` signatures stay
+/// swim-shaped — the seed `Workout` carries swim's `base100` only).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Thresholds {
+    /// Run threshold pace (resolves `% of pace` → [`Target::Pace`]).
+    pub run_base: Option<Pace>,
+    /// Bike FTP watts (resolves `%FTP` → [`Target::Power`]).
+    pub bike_ftp: Option<u32>,
+}
 
 /// Parse swimdojo workout notation into a [`Workout`].
 ///
@@ -75,8 +86,24 @@ pub fn parse_with_schema(
     base100: Option<Seconds>,
     schema: &FormatSchema,
 ) -> Result<Workout, Error> {
+    parse_with_thresholds(text, pool, base100, Thresholds::default(), schema)
+}
+
+/// Parse notation with athlete thresholds for `%`-target resolution.
+///
+/// [`parse_with_schema`] is this with no thresholds (all `%`-targets stay
+/// notes); pass `--run-base`/`--ftp` values here to resolve them.
+pub fn parse_with_thresholds(
+    text: &str,
+    pool: Pool,
+    base100: Option<Seconds>,
+    thresholds: Thresholds,
+    schema: &FormatSchema,
+) -> Result<Workout, Error> {
     let mut w = Workout::new(pool);
     w.base100 = base100;
+    w.run_base = thresholds.run_base;
+    w.bike_ftp = thresholds.bike_ftp;
     let mut through: Option<RepeatStep> = None;
 
     for (idx, raw) in text.lines().enumerate() {
@@ -118,6 +145,7 @@ pub fn parse_with_schema(
                     distance: w.dist(value),
                     stroke: None,
                     interval: None,
+                    target: None,
                     intensity: Default::default(),
                     notes: None,
                 });
@@ -310,22 +338,27 @@ fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Resul
     // Higdon evidence (effort lives in prose, not the cell).
     if let Some(duration) = leading_duration(first, &mut toks) {
         let rest: Vec<&str> = toks.collect();
-        // `@` after a *duration* is a target/note (`1min @ 85rpm, 100W`),
-        // never a swim interval — route it straight to notes so
-        // `parse_interval` can't misread `85rpm` as a `b`-style base
-        // (`take_time_prefix("85rpm")` yields 85 + tail `rpm`).
+        // `@` after a *duration* is a target (`1min @ 85rpm, 100W`,
+        // `20min @ 110% FTP`), never a swim interval — parse it with the
+        // workout's thresholds (`bike_ftp`/`run_base`) instead of
+        // `parse_interval` (which would misread `85rpm` as a `b`-style base:
+        // `take_time_prefix("85rpm")` yields 85 + tail `rpm`).
         if interval_text.is_some_and(|t| !t.is_empty()) {
+            let t = interval_text.unwrap_or("").trim();
+            let (target, leftover) = parse_target_text(t, w);
             let mut words: Vec<&str> = rest
                 .iter()
                 .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
                 .copied()
                 .collect();
-            let note = format!("@ {}", interval_text.unwrap_or("").trim());
-            words.push(Box::leak(note.into_boxed_str()));
+            if !leftover.is_empty() {
+                let note = format!("@ {leftover}");
+                words.push(Box::leak(note.into_boxed_str()));
+            }
             let notes = join_notes(words, None, tail_annotation);
             let inner = Step::Timed(TimedStep {
                 duration,
-                target: None,
+                target,
                 intensity: Default::default(),
                 notes,
             });
@@ -453,6 +486,7 @@ fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Resul
             distance: w.dist(value),
             stroke,
             interval,
+            target: None,
             intensity: Default::default(),
             notes: join_notes(words, interval_note, tail_annotation),
         })
@@ -857,12 +891,12 @@ fn suffixed_distance<'a>(
     }
 }
 
-/// Finish a run/bike explicit-unit distance step: parse `@` target text as
-/// a pace/power note (no `IntervalSpec` — run intervals are targets, not
-/// swim clocks), keep pace qualifiers (`5K pace`) in notes, drop filler.
+/// Finish a run/bike explicit-unit distance step: `@` text is a target
+/// (parsed with the workout's thresholds), not a swim clock; leftover
+/// target words and pace qualifiers (`5K pace`) stay notes; filler drops.
 #[allow(clippy::too_many_arguments)]
 fn finish_run_distance(
-    _w: &Workout,
+    w: &Workout,
     _line: &str,
     _n: usize,
     schema: &FormatSchema,
@@ -878,18 +912,39 @@ fn finish_run_distance(
         .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
         .copied()
         .collect();
-    // `@ ...` after a run distance is a target/note, never a swim interval.
+    // Trailing pace qualifiers resolve against `run_base` (`400 5K pace`
+    // needs a race-pace map — still notes; `@ 85% of 1mi pace` resolves).
+    let mut target: Option<Target> = None;
+    words.retain(|word| {
+        if target.is_none()
+            && let Some(t) = trailing_pace_target(word, distance, w.run_base)
+        {
+            target = Some(t);
+            return false;
+        }
+        true
+    });
     if let Some(t) = interval_text
         && !t.is_empty()
     {
-        let note = format!("@ {t}");
-        words.push(Box::leak(note.into_boxed_str()));
+        let (parsed, leftover) = parse_target_text(t, w);
+        if target.is_none() {
+            target = parsed;
+        } else if let Some(p) = parsed {
+            let note = format!("@ {p}");
+            words.push(Box::leak(note.into_boxed_str()));
+        }
+        if !leftover.is_empty() {
+            let note = format!("@ {leftover}");
+            words.push(Box::leak(note.into_boxed_str()));
+        }
     }
     let notes = join_notes(words, None, tail_annotation);
     let inner = Step::Distance(DistanceStep {
         distance,
         stroke: None,
         interval: None,
+        target,
         intensity: Default::default(),
         notes,
     });
@@ -902,6 +957,152 @@ fn finish_run_distance(
             notes: None,
         })),
     }
+}
+
+/// Parse `@`-target text with the workout's thresholds. Returns
+/// `(target, leftover)`: `target` is the resolved [`Target`] (or `None`
+/// when nothing resolved), `leftover` the unresolved words (kept as notes).
+///
+/// Forms (evidence: Zwift excerpts in `run-bike-notation.md` §2):
+/// `250W` / `100W` → watts; `@ 85rpm, 100W` → last-wins (power beats
+/// cadence when both present — the device's primary target); `Z4`/`z2` →
+/// HR zone (direct, needs no threshold); `95rpm` → cadence; `110% FTP`
+/// → `bike_ftp × pct` (needs `--ftp`); `85% of 1mi pace` → `run_base`
+/// scaled (needs `--run-base`); `5:00/km` or `5:00 /km` → pace.
+/// `5K pace` (named race pace, no map) and ramps (`from 30 to 70% FTP`)
+/// stay notes — `leftover`.
+///
+/// Percent semantics: `%FTP` scales watts up (`110%` of 250 W = 275 W);
+/// `% of 1mi pace` scales pace *down* in speed terms — 85% effort ≈
+/// `run_base / 0.85` secs/km (slower pace, fewer secs would be faster).
+fn parse_target_text(t: &str, w: &Workout) -> (Option<Target>, String) {
+    let mut target: Option<Target> = None;
+    let mut leftover: Vec<&str> = Vec::new();
+    // Split `85rpm, 100W` / `110% of 1mi pace, 200 m @ 70%` on commas and
+    // `@` (the `4x 200 m @ 110% …, 200 m @ 70% …` shape re-splits on `@`).
+    // Every consumed word is remembered: a beaten cadence word (`85rpm`
+    // when `100W` wins) stays in notes, never silently dropped.
+    let parts: Vec<&str> = t
+        .split([',', '@'])
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    let mut seen: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < parts.len() {
+        let part = parts[i];
+        // `from 30 to 70% FTP` ramps: keep whole (needs ≥2 parts).
+        if part.to_ascii_lowercase().starts_with("from ") && parts[i..].join(" ").contains('%') {
+            leftover.extend(parts[i..].iter().copied());
+            break;
+        }
+        if let Some(resolved) = target_word(part, w) {
+            // A stricter target supersedes: the beaten word joins leftover.
+            if let Some(prev) = target.replace(resolved) {
+                leftover.push(Box::leak(format!("@ {prev}").into_boxed_str()));
+            }
+            seen.push(part);
+        } else {
+            leftover.push(part);
+        }
+        i += 1;
+    }
+    // Beaten cadence/words (seen but not the winner) stay visible in notes.
+    for s in seen {
+        if !leftover.iter().any(|l| l.contains(s)) {
+            leftover.push(s);
+        }
+    }
+    // Winner-first ordering reads naturally (`@ 100W, 85rpm`); keep the
+    // caller's order otherwise.
+    let _ = seen;
+    (target, leftover.join(", "))
+}
+
+/// One `@`-target word → [`Target`]. `None` = not a target (stays notes).
+fn target_word(part: &str, w: &Workout) -> Option<Target> {
+    let low = part.to_ascii_lowercase();
+    let compact: String = low.chars().filter(|c| !c.is_whitespace()).collect();
+    // `Z4` → HR zone (direct; device resolves bounds from threshold).
+    if compact.len() == 2
+        && compact.starts_with('z')
+        && let Some(z) = compact[1..].parse::<u8>().ok()
+        && (1..=7).contains(&z)
+    {
+        return Some(Target::HrZone(z));
+    }
+    // `95rpm` → cadence.
+    if let Some(num) = compact.strip_suffix("rpm")
+        && let Ok(rpm) = num.parse::<u8>()
+        && rpm > 0
+    {
+        return Some(Target::Cadence(rpm));
+    }
+    // `250W` → watts.
+    if let Some(num) = compact.strip_suffix('w')
+        && !num.is_empty()
+        && num.bytes().all(|b| b.is_ascii_digit())
+        && let Ok(watts) = num.parse::<u32>()
+        && watts > 0
+    {
+        return Some(Target::Power(watts));
+    }
+    // `110% FTP` / `110%ftp` → bike_ftp × pct.
+    if let Some((pct, _)) = compact.split_once('%')
+        && let Ok(p) = pct.parse::<u32>()
+        && compact.contains("ftp")
+    {
+        let ftp = w.bike_ftp?;
+        return Some(Target::Power(ftp * p / 100));
+    }
+    // `85% of 1mi pace` / `85%of1mipace` → run_base / 0.85.
+    if compact.contains('%') && compact.contains("pace") {
+        let pct: u32 = compact.split('%').next()?.parse().ok()?;
+        if pct == 0 {
+            return None;
+        }
+        let base = w.run_base?.as_secs_per_km() as u64;
+        return Some(Target::Pace(Pace::from_secs_per_km(
+            (base * 100 / pct as u64) as u32,
+        )));
+    }
+    // `5:00/km` → pace.
+    if let Some((clock, _)) = compact.split_once('/')
+        && let Some(secs) = clock_time(clock)
+    {
+        return Some(Target::Pace(Pace::from_secs_per_km(secs)));
+    }
+    None
+}
+
+/// Trailing pace qualifier on a distance line (`400 … 5K pace` is named —
+/// still notes; `@ 85% of 1mi pace`-style trailing `% … pace` resolves via
+/// `run_base`). `distance` is unused today (a future race-pace map keys
+/// `5K`-style names off it); kept for the call shape.
+fn trailing_pace_target(word: &str, _distance: Distance, run_base: Option<Pace>) -> Option<Target> {
+    let low = word.to_ascii_lowercase();
+    if !low.contains('%') || !low.contains("pace") {
+        return None;
+    }
+    let pct: u32 = low.split('%').next()?.trim().parse().ok()?;
+    if pct == 0 {
+        return None;
+    }
+    let base = run_base?.as_secs_per_km() as u64;
+    Some(Target::Pace(Pace::from_secs_per_km(
+        (base * 100 / pct as u64) as u32,
+    )))
+}
+
+/// `m:ss` clock → seconds (`5:00` → 300). `None` on bad shape.
+fn clock_time(tok: &str) -> Option<u32> {
+    let (m, s) = tok.split_once(':')?;
+    let m: u32 = m.parse().ok()?;
+    let s: u32 = s.parse().ok()?;
+    if s >= 60 {
+        return None;
+    }
+    m.checked_mul(60)?.checked_add(s)
 }
 
 fn err(n: usize, text: &str, reason: impl Into<String>) -> Error {
@@ -1269,6 +1470,60 @@ mod tests {
             }
             other => panic!("got {other:?}"),
         }
+    }
+
+    #[test]
+    fn threshold_targets_resolve() {
+        use fit_core::Target;
+        let thresholds = Thresholds {
+            run_base: Some(Pace::from_secs_per_km(300)), // 5:00/km
+            bike_ftp: Some(250),
+        };
+        let schema = crate::parser::schema::zwift();
+        let w = parse_with_thresholds(
+            "Warm Up\n20min @ 110% FTP\n5min @ 85% of 1mi pace\n1min @ 250W\n3min @ Z4\n2min @ 95rpm\n10min from 75 to 70W\n",
+            pool(),
+            None,
+            thresholds,
+            &schema,
+        )
+        .expect("parses");
+        let flat = w.flat_steps();
+        assert_eq!(flat.len(), 6);
+        // 110% of 250 W = 275 W.
+        assert_eq!(flat[0].target, Some(Target::Power(275)));
+        // 85% effort on 5:00/km → 300/0.85 = 352 s/km.
+        assert_eq!(
+            flat[1].target,
+            Some(Target::Pace(Pace::from_secs_per_km(352)))
+        );
+        assert_eq!(flat[2].target, Some(Target::Power(250)));
+        assert_eq!(flat[3].target, Some(Target::HrZone(4)));
+        assert_eq!(flat[4].target, Some(Target::Cadence(95)));
+        // Ramps stay notes (no single target).
+        assert_eq!(flat[5].target, None);
+        assert!(
+            flat[5].notes.as_deref().unwrap_or("").contains("75"),
+            "{flat:?}"
+        );
+        // Distance lines carry targets too (`800 m @ 85% of 1mi pace`).
+        let w = parse_with_thresholds(
+            "Warm Up\n800 m @ 85% of 1mi pace\n",
+            pool(),
+            None,
+            thresholds,
+            &schema,
+        )
+        .unwrap();
+        let flat = w.flat_steps();
+        assert_eq!(
+            flat[0].target,
+            Some(Target::Pace(Pace::from_secs_per_km(352)))
+        );
+        assert_eq!(flat[0].distance, Some(Distance::meters(800)));
+        // Without thresholds the same lines stay notes (back-compat).
+        let w = parse_with_schema("Warm Up\n20min @ 110% FTP\n", pool(), None, &schema).unwrap();
+        assert_eq!(w.flat_steps()[0].target, None);
     }
 
     #[test]

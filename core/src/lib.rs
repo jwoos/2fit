@@ -568,6 +568,10 @@ pub struct DistanceStep {
     pub stroke: Option<Stroke>,
     /// Interval to swim on, if any.
     pub interval: Option<IntervalSpec>,
+    /// Effort target (run/bike pace, power, HR zone, cadence).
+    /// `None` = no target (swim default; Higdon base cells).
+    #[serde(default)]
+    pub target: Option<Target>,
     /// Effort level of the step.
     #[serde(default)]
     pub intensity: Intensity,
@@ -880,6 +884,12 @@ pub struct Workout {
     /// The swimmer's base pace per 100 (pool units), if known. Required to
     /// resolve [`IntervalSpec::Base`]; see swimdojo "Bases".
     pub base100: Option<Seconds>,
+    /// The runner's threshold pace (secs/km), if known. Resolves `%`-of-base
+    /// run pace targets (`@ 85% of 1mi pace`) to [`Target::Pace`].
+    pub run_base: Option<Pace>,
+    /// The cyclist's FTP in watts, if known. Resolves `%FTP` targets
+    /// (`@ 110% FTP`, `from 30 to 70% FTP`) to watts.
+    pub bike_ftp: Option<u32>,
     /// The workout's sections, in swum order.
     pub sections: Vec<Section>,
 }
@@ -917,6 +927,8 @@ impl Workout {
             sub_sport: SubSport::LapSwim,
             pool: Some(pool),
             base100: None,
+            run_base: None,
+            bike_ftp: None,
             sections: Vec::new(),
         }
     }
@@ -937,6 +949,8 @@ impl Workout {
             sub_sport,
             pool: None,
             base100: None,
+            run_base: None,
+            bike_ftp: None,
             sections: Vec::new(),
         }
     }
@@ -1029,7 +1043,9 @@ impl Workout {
                     distance: Some(s.distance),
                     time: None,
                     stroke: s.stroke,
-                    target: s.stroke.map(Target::Swim),
+                    // Explicit run/bike targets win; else the swim stroke
+                    // maps (legacy path).
+                    target: s.target.or_else(|| s.stroke.map(Target::Swim)),
                     name: Some(step.display()),
                     notes: s.notes.clone(),
                     intensity: s.intensity,
@@ -1409,6 +1425,7 @@ mod tests {
                         distance: Distance::yards(100),
                         stroke: None,
                         interval: Some(IntervalSpec::Fixed(Seconds::minutes(2))),
+                        target: None,
                         intensity: Intensity::default(),
                         notes: None,
                     })],
@@ -1421,6 +1438,7 @@ mod tests {
                         distance: Distance::yards(50),
                         stroke: None,
                         interval: Some(IntervalSpec::Fixed(Seconds::minutes(1))),
+                        target: None,
                         intensity: Intensity::default(),
                         notes: None,
                     })],
@@ -1466,6 +1484,7 @@ mod tests {
                     distance: Distance::yards(100),
                     stroke: None,
                     interval: None,
+                    target: None,
                     intensity: Intensity::default(),
                     notes: None,
                 })],
@@ -1489,6 +1508,7 @@ mod tests {
                     distance: Distance::yards(100),
                     stroke: None,
                     interval: None,
+                    target: None,
                     intensity: Intensity::default(),
                     notes: None,
                 })],
@@ -1511,6 +1531,7 @@ mod tests {
                 distance: Distance::yards(100),
                 stroke: Some(Stroke::IM),
                 interval: None,
+                target: None,
                 intensity: Intensity::default(),
                 notes: None,
             })],
@@ -1552,6 +1573,7 @@ mod tests {
                     distance: Distance::yards(100),
                     stroke: None,
                     interval: None,
+                    target: None,
                     intensity: Intensity::default(),
                     notes: None,
                 }),

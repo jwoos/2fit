@@ -35,3 +35,18 @@ pub fn parse_with_schema(
 ) -> Result<fit_core::Workout, parser::swimdojo::Error> {
     parser::swimdojo::parse_with_schema(text, pool, base100, schema)
 }
+
+/// Parse notation with athlete thresholds (`--run-base`/`--ftp` values).
+///
+/// Sugar over [`parser::swimdojo::parse_with_thresholds`]: resolves
+/// `%FTP`/`% of pace` targets during parse; without thresholds those stay
+/// notes.
+pub fn parse_with_thresholds(
+    text: &str,
+    pool: fit_core::Pool,
+    base100: Option<fit_core::Seconds>,
+    thresholds: parser::swimdojo::Thresholds,
+    schema: &fit_core::FormatSchema,
+) -> Result<fit_core::Workout, parser::swimdojo::Error> {
+    parser::swimdojo::parse_with_thresholds(text, pool, base100, thresholds, schema)
+}

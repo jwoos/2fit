@@ -70,6 +70,7 @@ fn run_workout_round_trip() {
                 distance: Distance::miles(3),
                 stroke: None,
                 interval: None,
+                target: None,
                 intensity: Intensity::Active,
                 notes: None,
             }),

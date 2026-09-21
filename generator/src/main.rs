@@ -111,6 +111,17 @@ struct Args {
     #[arg(long)]
     base: Option<String>,
 
+    /// Run threshold pace, `m:ss/km` or `m:ss/mi` (e.g. `5:00/km`,
+    /// `8:00/mi`); resolves `% of pace` run targets (`@ 85% of 1mi pace`).
+    /// Direct zones (`Z4`) and pace clocks (`5:00/km`) need no flag.
+    #[arg(long, value_name = "PACE")]
+    run_base: Option<String>,
+
+    /// Bike FTP in watts (e.g. `250`); resolves `%FTP` targets
+    /// (`@ 110% FTP` → 275 W). Direct watts (`250W`) need no flag.
+    #[arg(long, value_name = "WATTS")]
+    ftp: Option<String>,
+
     /// Workout-format schema: a JSON file (see `fit_scraper schema`), or a
     /// built-in preset (`swimdojo`, `myswimpro`, `higdon-run`, `zwift`).
     /// Default follows `--sport`: `swimdojo` for swim, `higdon-run` for
@@ -129,9 +140,17 @@ fn main() -> Result<()> {
     let text = read_input(args.file.as_deref())?;
     let pool = resolve_pool(args.sport, args.pool.as_deref())?;
     let base = args.base.as_deref().map(parse_base).transpose()?;
+    let run_base = args.run_base.as_deref().map(parse_pace).transpose()?;
+    let ftp = args.ftp.as_deref().map(parse_ftp).transpose()?;
     let schema = resolve_schema(args.format.as_deref(), args.sport)?;
-    let mut workout = fit_generator::parse_with_schema(&text, pool, base, &schema)
+    let thresholds = fit_generator::parser::swimdojo::Thresholds {
+        run_base,
+        bike_ftp: ftp,
+    };
+    let mut workout = fit_generator::parse_with_thresholds(&text, pool, base, thresholds, &schema)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+    workout.run_base = run_base;
+    workout.bike_ftp = ftp;
     workout.sport = args.sport.as_sport();
     workout.sub_sport = match args.sub_sport {
         Some(s) => s.as_sub_sport(),
@@ -267,6 +286,52 @@ fn parse_base(s: &str) -> Result<Seconds> {
     Ok(Seconds::secs(secs))
 }
 
+/// `m:ss/km` or `m:ss/mi` (e.g. `5:00/km`, `8:00/mi`): mi converts at
+/// 1 mi = 1609.344 m (integer round, like `Distance::from_miles_decimal`).
+fn parse_pace(s: &str) -> Result<fit_core::Pace> {
+    let low = s.trim().to_ascii_lowercase().replace(' ', "");
+    let (clock, per) = low
+        .split_once('/')
+        .ok_or_else(|| anyhow::anyhow!("unparseable pace '{s}': want e.g. 5:00/km"))?;
+    let (m, sec) = clock
+        .split_once(':')
+        .ok_or_else(|| anyhow::anyhow!("unparseable pace '{s}': want e.g. 5:00/km"))?;
+    let m: u32 = m
+        .parse()
+        .with_context(|| format!("unparseable pace '{s}': want e.g. 5:00/km"))?;
+    let sec: u32 = sec
+        .parse()
+        .with_context(|| format!("unparseable pace '{s}': want e.g. 5:00/km"))?;
+    if sec >= 60 {
+        bail!("unparseable pace '{s}': seconds must be < 60");
+    }
+    let secs_per_unit = m * 60 + sec;
+    if secs_per_unit == 0 {
+        bail!("unparseable pace '{s}': pace must be > 0");
+    }
+    let per_km = match per {
+        "km" | "k" => secs_per_unit,
+        "mi" | "mile" | "miles" => ((secs_per_unit as u64 * 1000 + 804) / 1609) as u32,
+        _ => bail!("unparseable pace '{s}': unit must be /km or /mi"),
+    };
+    Ok(fit_core::Pace::from_secs_per_km(per_km))
+}
+
+/// Plain watts (`250`).
+fn parse_ftp(s: &str) -> Result<u32> {
+    let watts: u32 = s
+        .trim()
+        .strip_suffix(['w', 'W'])
+        .unwrap_or(s.trim())
+        .trim()
+        .parse()
+        .with_context(|| format!("unparseable ftp '{s}': want e.g. 250"))?;
+    if watts == 0 {
+        bail!("unparseable ftp '{s}': watts must be > 0");
+    }
+    Ok(watts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,6 +412,28 @@ mod tests {
         assert_eq!(SubSportKind::Indoor.as_sub_sport(), SubSport::IndoorBike);
         assert_eq!(SubSportKind::Mtb.as_sub_sport(), SubSport::Trail);
         assert_eq!(SubSportKind::Road.as_sub_sport(), SubSport::Road);
+    }
+
+    #[test]
+    fn paces_and_ftp() {
+        assert_eq!(
+            parse_pace("5:00/km").unwrap(),
+            fit_core::Pace::from_secs_per_km(300)
+        );
+        assert_eq!(
+            parse_pace("8:00/mi").unwrap(),
+            fit_core::Pace::from_secs_per_km(298) // 480/1.60934
+        );
+        assert_eq!(parse_pace("6:00/k").unwrap().as_secs_per_km(), 360);
+        assert!(parse_pace("fast").is_err());
+        assert!(parse_pace("5:00").is_err());
+        assert!(parse_pace("5:99/km").is_err());
+        assert!(parse_pace("0:00/km").is_err());
+        assert!(parse_pace("5:00/milez").is_err());
+        assert_eq!(parse_ftp("250").unwrap(), 250);
+        assert_eq!(parse_ftp("250W").unwrap(), 250);
+        assert!(parse_ftp("0").is_err());
+        assert!(parse_ftp("fast").is_err());
     }
 
     #[test]
