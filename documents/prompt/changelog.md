@@ -1,5 +1,6 @@
 # Changelog
 
+- Turn 13 (2026-09-21): Phase 3 parser + schemas — `5f2dcb7` units/durations, `287c047` fixtures, `f5f36f8` higdon_run/zwift, `6ef165f` infer. See checkpoint.md for detail.
 - Turn 12 (2026-09-21): Phase 2 CLI + per-sport round-trips (`9c86e03`). See checkpoint.md for detail.
 - Turn 11 (2026-09-20): Phase 1 Core IDL — `d15fc11` units, `bf529c9` sport/pool, `0713617` target/timed. See checkpoint.md for detail.
 - Turn 10 (2026-09-20): Multisport Phase 0 survey. See checkpoint.md for detail.

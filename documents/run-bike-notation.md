@@ -27,16 +27,33 @@ Evidence details:
 - `Rest` / `Cross` cells are whole-day markers, not timed rest steps: they map
   to "no step" (like swim Technique), not to `Step::Rest`.
 
-## Source 2 (proposed, NOT yet fetched): interval-style run/bike lines
+## Source 2 (fetched 2026-09-21): interval-style run/bike lines
 
-These shapes are assumed from the checkpoint plan and must be confirmed
-against a real site in Phase 3 before parser work:
+Confirmed against real sites (both fetched live; excerpts in fixtures):
 
-- `8 x 400 @ 5k pace` — repeat + distance + named pace target
-- `2 x 20:00 @ 250W` — repeat + duration + power target
-- `95 rpm` — cadence target; `min/km` — pace unit; HR zones; %FTP
+- Higdon Intermediate 10K grid (https://www.halhigdon.com/training-programs/10k-training/intermediate-10k/):
+  `8 x 400 5K pace`, `9 x 400 5K pace`, `10 x 400 5K pace` (Wed speedwork —
+  bare meters + named `5K pace` qualifier, no `@`); `35 min tempo run`,
+  `40 min tempo run`, `60 min cross` (leading durations); `3.5 mi run`,
+  `5.9 km run` (decimal miles/km). Program prose: 400s "at about the pace
+  you would run in a 5K race", tempo runs "buildup … to near race pace".
+- Zwift via whatsonzwift.com (https://whatsonzwift.com/workouts/ftp-tests/,
+  `Zwift 101: Running` plan page): bike `5min free ride`,
+  `1min @ 85rpm, 100W` … `1min @ 85rpm, 250W` (spaceless durations, `@`
+  cadence+watts — NOT a swim interval); `10min from 75 to 70W`,
+  `5min from 30 to 70% FTP`, `20min free ride target 110% FTP` (ramps +
+  `%FTP`); run `400 m Walk`, `800 m Jog At Easy Pace`, `1600 m Med Pace`,
+  `4x 200 m @ 110% of 1mi pace, 200 m @ 70% of 1mi pace` (spaceless counts,
+  `% of 1mi pace`, comma-joined reps).
 
-Do NOT build schema tables for these yet; Phase 3 verifies first.
+Phase 3 decision (evidence-backed): `%FTP` / `% of 1mi pace` / named
+`5K pace` / watts+rpm stay **notes**, not `Target` — resolving them needs
+athlete thresholds (`run_base`/`bike_ftp`, deferred since Phase 1), and
+Higdon's base cells carry no target at all. No new schema fields were
+needed: `higdon_run()` / `zwift()` differ from swimdojo only in
+vocabulary tables (freestyle/rest/recovery words); `infer` learns the
+run/bike filler (`run`, `tempo`, `fast`, `ride`, `walk`, `jog`, `cross`)
+into `freestyle_words` with swim-only tables honestly gapped.
 
 ## Confirmed IDL shapes
 
