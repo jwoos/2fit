@@ -54,10 +54,12 @@ struct Args {
     #[arg(long)]
     base: Option<String>,
 
-    /// Workout-format schema JSON (default: swimdojo vocabulary).
-    /// See `fit_scraper schema` for generating one from samples.
-    #[arg(long)]
-    format: Option<PathBuf>,
+    /// Workout-format schema: a JSON file (see `fit_scraper schema`), or a
+    /// built-in preset (`swimdojo`, `myswimpro`, `higdon-run`, `zwift`).
+    /// Default follows `--sport`: `swimdojo` for swim, `higdon-run` for
+    /// run, `zwift` for bike.
+    #[arg(long, value_name = "PATH|PRESET")]
+    format: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -65,15 +67,7 @@ fn main() -> Result<()> {
     let text = read_input(args.file.as_deref())?;
     let pool = resolve_pool(args.sport, args.pool.as_deref())?;
     let base = args.base.as_deref().map(parse_base).transpose()?;
-    let schema = match args.format.as_deref() {
-        Some(path) => {
-            let json = std::fs::read_to_string(path)
-                .with_context(|| format!("reading schema {}", path.display()))?;
-            serde_json::from_str(&json)
-                .with_context(|| format!("parsing schema {}", path.display()))?
-        }
-        None => fit_generator::parser::schema::swimdojo(),
-    };
+    let schema = resolve_schema(args.format.as_deref(), args.sport)?;
     let mut workout = fit_generator::parse_with_schema(&text, pool, base, &schema)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     workout.sport = args.sport.as_sport();
@@ -107,7 +101,33 @@ fn read_input(path: Option<&std::path::Path>) -> Result<String> {
     }
 }
 
-/// Resolve the parse-time pool: swim honors `--pool` (default `25yd`);
+/// Resolve the parse schema: a JSON file path, a built-in preset name, or
+/// the per-sport default (`swimdojo` / `higdon-run` / `zwift`).
+fn resolve_schema(format: Option<&str>, sport: SportKind) -> Result<fit_core::FormatSchema> {
+    use fit_generator::parser::schema;
+    let preset = |name: &str| -> Option<fit_core::FormatSchema> {
+        match name {
+            "swimdojo" => Some(schema::swimdojo()),
+            "myswimpro" => Some(schema::myswimpro()),
+            "higdon-run" | "higdon" | "run" => Some(schema::higdon_run()),
+            "zwift" | "bike" => Some(schema::zwift()),
+            _ => None,
+        }
+    };
+    match format {
+        None => Ok(match sport {
+            SportKind::Swim => schema::swimdojo(),
+            SportKind::Run => schema::higdon_run(),
+            SportKind::Bike => schema::zwift(),
+        }),
+        Some(s) if preset(s).is_some() => Ok(preset(s).unwrap_or_else(schema::swimdojo)),
+        Some(path) => {
+            let json =
+                std::fs::read_to_string(path).with_context(|| format!("reading schema {path}"))?;
+            serde_json::from_str(&json).with_context(|| format!("parsing schema {path}"))
+        }
+    }
+}
 /// run/bike reject it (`Workout.pool` stays `None`) and parse bare numbers
 /// in a throwaway 25-yd pool (unit source only — but note: a run parser in
 /// Phase 3 will supply explicit km/mi units instead).
@@ -225,6 +245,30 @@ mod tests {
         assert!(resolve_pool(SportKind::Run, None).is_ok());
         assert!(resolve_pool(SportKind::Run, Some("25yd")).is_err());
         assert!(resolve_pool(SportKind::Bike, Some("25yd")).is_err());
+    }
+
+    #[test]
+    fn schema_resolution() {
+        assert_eq!(
+            resolve_schema(None, SportKind::Swim).unwrap().name,
+            "swimdojo"
+        );
+        assert_eq!(
+            resolve_schema(None, SportKind::Run).unwrap().name,
+            "higdon-run"
+        );
+        assert_eq!(resolve_schema(None, SportKind::Bike).unwrap().name, "zwift");
+        assert_eq!(
+            resolve_schema(Some("myswimpro"), SportKind::Swim)
+                .unwrap()
+                .name,
+            "myswimpro"
+        );
+        assert_eq!(
+            resolve_schema(Some("run"), SportKind::Bike).unwrap().name,
+            "higdon-run"
+        );
+        assert!(resolve_schema(Some("/nonexistent.json"), SportKind::Swim).is_err());
     }
 
     #[test]
