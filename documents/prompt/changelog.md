@@ -1,6 +1,12 @@
 # Changelog
 
-- Turn 15 (2026-09-21): user decisions — `bc0f071` sub-sport, `a986512` per-day Higdon, `8aecd29` target flags, `988ca00` .zwo import. See checkpoint.md for detail.
+- Turn 16 (2026-09-21): review — `a8726cb` removes `Box::leak` note plumbing (owned `String`s) + true last-wins targets (winner source word not notes). See checkpoint.md.
+- Turn 15 (2026-09-21): user decisions 1–4 done (all green: 83 tests, clippy + fmt clean) —
+  `bc0f071` sub-sport (#4: `SubSport` + `Workout.sub_sport` + `effective_sub_sport()` + encoder map + `2fit-gen --sub-sport` presets);
+  `a986512` per-workout Higdon (#1: `plan_days()`/`day_body()`/`fetch_days()` + `fetch --per-day [--out-dir] [--skip-rest]` + `2fit-gen --name`);
+  `8aecd29` target flags (#3: `Workout::{run_base,bike_ftp}` + `parse_target_text` direct `250W`/`Z4`/`95rpm`, gated `110% FTP`/`85% of 1mi pace` + `2fit-gen --run-base/--ftp`);
+  `988ca00` bike source (#2: `.zwo` file import `parser::zwo` + `2fit-gen --zwo`, no new scraper; survey in `run-bike-notation.md` §3).
+  Deferred: named race pace, ramp expansion, `FreeRide` open steps, `<textevent>` cues.
 - Turn 14 (2026-09-21): Phase 4 scraper + CLI — `2843160` Higdon site, `82f550c` format presets. See checkpoint.md for detail.
 - Turn 13 (2026-09-21): Phase 3 parser + schemas — `5f2dcb7` units/durations, `287c047` fixtures, `f5f36f8` higdon_run/zwift, `6ef165f` infer. See checkpoint.md for detail.
 - Turn 12 (2026-09-21): Phase 2 CLI + per-sport round-trips (`9c86e03`). See checkpoint.md for detail.
