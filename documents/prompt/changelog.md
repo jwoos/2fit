@@ -1,6 +1,7 @@
 # Changelog
 
-- Turn 16 (2026-09-21): review — `a8726cb` removes `Box::leak` note plumbing (owned `String`s) + true last-wins targets (winner source word not notes). See checkpoint.md.
+- Turn 17 (2026-09-21): named race pace — `3d4ca88` (`Workout.race_paces` + `--race-pace NAME=PACE` + trailing/`@` resolution). See checkpoint.md.
+- Turn 16 (2026-09-21): review — `a8726cb` removes `Box::leak` note plumbing (owned `String`s) + true last-wins targets (winner source word not notes). See changelog detail below.
 - Turn 15 (2026-09-21): user decisions 1–4 done (all green: 83 tests, clippy + fmt clean) —
   `bc0f071` sub-sport (#4: `SubSport` + `Workout.sub_sport` + `effective_sub_sport()` + encoder map + `2fit-gen --sub-sport` presets);
   `a986512` per-workout Higdon (#1: `plan_days()`/`day_body()`/`fetch_days()` + `fetch --per-day [--out-dir] [--skip-rest]` + `2fit-gen --name`);

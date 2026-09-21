@@ -1,28 +1,21 @@
-# Checkpoint (2026-09-21) — Turn 16: review; NEXT: user review
+# Checkpoint (2026-09-21) — Turn 17: named race pace; NEXT: user review
 
-## Done — 1 commit (green: 83 tests, clippy + fmt clean)
+## Done — 1 commit (green: 85 tests, clippy + fmt clean)
 
-- **`a8726cb` parser hygiene**: `join_notes`/`take_stroke` own `String`s
-  (4× `Box::leak` gone — was per-parse intentional leaks to fit `&str`
-  lifetimes) + `parse_target_text` true last-wins (winner's source word
-  not echoed in notes; beaten word kept). No behavior change besides
-  winner-word notes; all 33 parser tests pass unmodified.
+- **`3d4ca88` named race pace** (closes Phase 3 deferral): core
+  `Workout.race_paces: BTreeMap<String, Pace>` (serde-default,
+  back-compat) + `pace_key()` (lowercase alphanumeric) +
+  `Workout::race_pace()` lookup; `Thresholds.race_paces` plumbed
+  (`parse_with_thresholds` seeds `w.race_paces`); `target_word` tries
+  the map after `%`/clock (`@ marathon pace`, bare `@ 5k`);
+  `trailing_pace_target` takes the longest resolving suffix window
+  (`8 x 400 5K pace`, `1600 m Med Pace`); `2fit-gen --race-pace
+  NAME=PACE` (repeatable, `pace_key`-normalized, `--zwo`-rejected).
+  Unknown names stay notes. Tests: `named_race_paces_resolve` +
+  `race_pace_flags` (85 total). Live: 228 B `.fit`, SPEED 3448.
+  Docs: `idl.md` Workout row, `run-bike-notation.md` § Named race paces.
 
-## Review findings (read: all spec docs, code, 83 tests; ran clippy/fmt)
+## Deferred (remaining)
 
-- Codebase is coherent: IDL ↔ parser ↔ encoder ↔ scraper match their
-  docs (`idl.md`, `run-bike-notation.md`, `higdon.md`, `myswimpro.md`,
-  `swimdojo-site.md`, `rustyfit.md`); spec Generator 1–7 + Scraper 1–3
-  all closed (tasks.md).
-- Debt paid above: `Box::leak` plumbing. Remaining `Box::leak`: none.
-- Known bugs: none found. `zwo` two-pass text scan + `tag_text`
-  substring matching is O(n²)-ish but inputs are KB-scale; fine.
-- Minor notes (not fixed, by design): `zwo` ignores `<textevent>` cues;
-  `parse_target_text` `@`-re-split means a literal `@` in prose
-  splits; `Rest`/`Cross` day cells parse to notes-only zero-step bodies.
-
-## Deferred (unchanged from turn 15)
-
-- Named race pace (`5K pace` → needs pace map), ramp expansion (steady
-  midpoint today), `FreeRide` open steps (target None — correct).
-- `.zwo` `<textevent>` cues dropped (notes only carry labels today).
+- Ramp expansion (steady midpoint today), `FreeRide` open steps
+  (target None — correct), `.zwo` `<textevent>` cues dropped.

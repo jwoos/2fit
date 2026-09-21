@@ -4,7 +4,7 @@ Agent working notes (token-light index). Sections live in `prompt/` — read
 only what the turn needs. Per-turn, update `TURN` below and
 `prompt/checkpoint.md`; fold old checkpoints into `prompt/changelog.md`.
 
-TURN: 16
+TURN: 17
 
 - [intro](prompt/intro.md) — what we're building (generator + scraper)
 - [guidelines](prompt/guidelines.md) — working rules (atomic commits, evidence, TURN tracking, documents/)

@@ -1,5 +1,7 @@
 # Tasks
 
+- [x] Named race pace (`Workout.race_paces` + `pace_key`, `Thresholds.race_paces`, `target_word`/`trailing_pace_target` map resolution, `2fit-gen --race-pace NAME=PACE`)
+
 - [x] User decision 1: per-workout Higdon (`fetch_days`, `fetch --per-day/--out-dir/--skip-rest`, `2fit-gen --name`)
 - [x] User decision 2: bike source survey → `.zwo` import (`parser::zwo`, `2fit-gen --zwo`, fixtures), no new scraper
 - [x] User decision 3: target flags (`Workout::{run_base,bike_ftp}`, `parse_target_text`, `2fit-gen --run-base/--ftp`; HR/pace/power/cadence direct, `%` gated)
