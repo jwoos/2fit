@@ -12,3 +12,5 @@
 - documents/myswimpro.md — myswimpro site mechanics, divergences, parser changes, inference report
 - Hal Higdon Novice 1: https://www.halhigdon.com/training-programs/marathon-training/novice-1-marathon/ — run line shapes (`3 mi run`, bare long runs, Rest/Cross markers)
 - documents/higdon.md — Higdon grid mechanics, normalization, inference + CLI evidence
+- Zwift `.zwo`: h4l reference https://github.com/h4l/zwift-workout-file-reference — element/attribute map for the importer
+- `documents/bike-fixtures/zwo/{sst-traditional,active-recovery}.zwo` — attributed format fixtures (bdcheung collection, unlicensed — tests only)

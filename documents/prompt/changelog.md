@@ -1,5 +1,6 @@
 # Changelog
 
+- Turn 15 (2026-09-21): user decisions — `bc0f071` sub-sport, `a986512` per-day Higdon, `8aecd29` target flags, `988ca00` .zwo import. See checkpoint.md for detail.
 - Turn 14 (2026-09-21): Phase 4 scraper + CLI — `2843160` Higdon site, `82f550c` format presets. See checkpoint.md for detail.
 - Turn 13 (2026-09-21): Phase 3 parser + schemas — `5f2dcb7` units/durations, `287c047` fixtures, `f5f36f8` higdon_run/zwift, `6ef165f` infer. See checkpoint.md for detail.
 - Turn 12 (2026-09-21): Phase 2 CLI + per-sport round-trips (`9c86e03`). See checkpoint.md for detail.

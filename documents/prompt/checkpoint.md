@@ -1,35 +1,38 @@
-# Checkpoint (2026-09-21) — Turn 14: Phase 4 scraper + CLI done; NEXT: user review
+# Checkpoint (2026-09-21) — Turn 15: user decisions 1–4 done; NEXT: review
 
-## Done — 2 atomic commits (all green: 79 tests, clippy + fmt clean)
+## Done — 4 commits (all green: 83 tests, clippy + fmt clean)
 
-- **`2843160` Higdon scraper**: `site::Higdon` (plain-HTML `table.tablesaw`
-  grids: miles table wins, km second; `Week N` + bare cells + `—>Rest days:`
-  annotations, no day prefixes — parser has no day model; `normalize_cell`
-  `6`→`6 mi`; `is_day_marker` Rest/Cross/race names). `list` seeds from
-  Novice 1's 14 program links (no server search; tag/query client-side);
-  `fetch` parses any plan URL. Offline fixture
-  `scraper/tests/data/higdon-novice1.html` (118951 B saved page) + 4 tests
-  incl. whole-plan parse via `higdon_run`. Live verified: `list --limit 3`,
-  `fetch novice-1` → pipe → `2fit-gen --sport run` → 2546 B `.fit`.
-  Wired as `2fit-scrape --site higdon`.
-- **`82f550c` `--format` presets**: JSON path or preset name (`swimdojo`,
-  `myswimpro`, `higdon-run|higdon|run`, `zwift|bike`); default follows
-  `--sport` (swim→swimdojo, run→higdon-run, bike→zwift).
-  `resolve_schema()` + `schema_resolution` test; live smoke all 3 defaults.
+- **`bc0f071` sub-sport (#4)**: `SubSport::{LapSwim,OpenWater,Street,Trail,
+  Track,IndoorRun,Road,IndoorBike,Generic,Other}` + `Workout.sub_sport`
+  (serde-default, back-compat) + `effective_sub_sport()` (cross-sport falls
+  back to per-sport default, never guesses) + encoder map (run Trail/TRACK/
+  INDOOR_RUNNING, bike Trail→MOUNTAIN/Track→TRACK_CYCLING/INDOOR_CYCLING,
+  swim OpenWater). `2fit-gen --sub-sport` presets (treadmill/indoor-run,
+  indoor/mtb/track-cycling aliases). Test `sub_sport_overrides_and_fallbacks`.
+- **`a986512` per-workout Higdon (#1)**: `plan_days()` (126 cells Novice 1)
+  + `day_body()` (work day → 1 line, rest day → `—>W1 Mon Rest` = 0 steps)
+  + `Higdon::fetch_days()` + `fetch --per-day [--out-dir DIR]
+  [--skip-rest]` (stdout `=== title ===` bodies or `<slug>.txt` files) +
+  `2fit-gen --name` (FIT `wkt_name`). Live: 86 day files, `w1-tue.txt` →
+  111 B `.fit` with name encoded. Whole-plan `fetch` unchanged.
+- **`8aecd29` target flags (#3)**: `Workout::{run_base,bike_ftp}` +
+  `Thresholds` plumb (`parse_with_thresholds`, lib re-export) +
+  `parse_target_text`/`target_word`/`trailing_pace_target`: `250W`→Power,
+  `Z4`→HrZone, `95rpm`→Cadence direct (no flags); `110% FTP`→`ftp×pct`,
+  `85% of 1mi pace`→`run_base/0.85` gated (stay notes without); beaten
+  words kept in notes (last-wins, power beats cadence); ramps/named pace
+  stay notes. `DistanceStep.target` (flatten prefers it over stroke map).
+  `2fit-gen --run-base m:ss/km|/mi --ftp W`. Live smoke both paths.
+- **`988ca00` bike source (#2)**: survey in `run-bike-notation.md` §3 —
+  whatsonzwift Cloudflare-walled, TrainerRoad/Day walled, ergdb parked,
+  bdcheung `.zwo` unlicensed/stale. Decision: **`.zwo` file import, no new
+  scraper**. `parser::zwo` (Warmup/Cooldown/SteadyState/FreeRide→Timed,
+  IntervalsT→Repeat, Ramp→midpoint+range notes, Power fractions×ftp,
+  Cadence, sportType run) + `2fit-gen --zwo FILE [--ftp]` (rejects text
+  flags). 2 attributed fixtures + 3 tests. Live: SST → 279 B `.fit`.
 
-## State of multisport (Phases 0–4 complete)
+## Deferred (documented, not built)
 
-- Phase 0 survey → `run-bike-notation.md` (Higdon + Zwift evidence).
-- Phase 1 IDL → `Sport`, optional pool, km/mi, `Target`/`Pace`,
-  `Step::Timed`, `FlatStep.target` (+ `idl.md` FIT mapping).
-- Phase 2 CLI sport + per-sport round-trips.
-- Phase 3 parser units/durations + `higdon_run`/`zwift` schemas + fixtures
-  + infer filler; `%FTP`/`%pace`/named pace stay notes (thresholds deferred).
-- Phase 4 Higdon scraper + format presets (this turn).
-
-## NEXT (deferred, needs user direction)
-
-- More run/bike sources (Zwift/whatsonzwift scraper? TrainingPeaks?
-  manana — Phase 3/4 used hand excerpts, no bike scraper yet).
-- `run_base`/`bike_ftp` + `Target` resolution (today targets are notes).
-- INDOOR_* / TRAIL / TRACK sub-sports (today STREET/ROAD).
+- Named race pace (`5K pace` → needs pace map), ramp expansion (steady
+  midpoint today), `FreeRide` open steps (target None — correct).
+- `.zwo` `<textevent>` cues dropped (notes only carry labels today).

@@ -1,5 +1,9 @@
 # Tasks
 
+- [x] User decision 1: per-workout Higdon (`fetch_days`, `fetch --per-day/--out-dir/--skip-rest`, `2fit-gen --name`)
+- [x] User decision 2: bike source survey → `.zwo` import (`parser::zwo`, `2fit-gen --zwo`, fixtures), no new scraper
+- [x] User decision 3: target flags (`Workout::{run_base,bike_ftp}`, `parse_target_text`, `2fit-gen --run-base/--ftp`; HR/pace/power/cadence direct, `%` gated)
+- [x] User decision 4: `--sub-sport` (core `SubSport`, encoder map, CLI presets; street/road defaults)
 - [x] Multisport Phase 0: survey run/bike notation → documents/run-bike-notation.md; verify FIT run/bike facts in rustyfit source
 - [x] Multisport Phase 1: core IDL (`Sport`, optional pool, km/mi units, `Target`/`Pace`, `Step::Timed`, `FlatStep.target`)
 - [x] Multisport Phase 2: `2fit-gen --sport` + per-sport round-trip tests
