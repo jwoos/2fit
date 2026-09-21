@@ -346,14 +346,13 @@ fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Resul
         if interval_text.is_some_and(|t| !t.is_empty()) {
             let t = interval_text.unwrap_or("").trim();
             let (target, leftover) = parse_target_text(t, w);
-            let mut words: Vec<&str> = rest
+            let mut words: Vec<String> = rest
                 .iter()
                 .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
-                .copied()
+                .map(|t| t.to_string())
                 .collect();
             if !leftover.is_empty() {
-                let note = format!("@ {leftover}");
-                words.push(Box::leak(note.into_boxed_str()));
+                words.push(format!("@ {leftover}"));
             }
             let notes = join_notes(words, None, tail_annotation);
             let inner = Step::Timed(TimedStep {
@@ -376,7 +375,7 @@ fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Resul
         let mut notes = join_notes(
             rest.iter()
                 .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
-                .copied()
+                .map(|t| t.to_string())
                 .collect(),
             interval_note,
             tail_annotation,
@@ -434,9 +433,11 @@ fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Resul
     // is reps, not distance (see `TechniqueStep` docs).
     if let Some(pos) = lower.iter().position(|t| schema.is_drill(t)) {
         let drill = rest[pos];
-        let mut words = Vec::new();
-        words.extend_from_slice(&rest[..pos]);
-        words.extend_from_slice(&rest[pos + 1..]);
+        let words: Vec<String> = rest[..pos]
+            .iter()
+            .chain(&rest[pos + 1..])
+            .map(|s| s.to_string())
+            .collect();
         let notes = join_notes(words, interval_note, tail_annotation);
         return Ok(Step::Technique(TechniqueStep {
             drill: drill.to_string(),
@@ -666,11 +667,11 @@ fn take_time_prefix(s: &str) -> Option<(u32, &str)> {
 
 /// Stroke word(s) in the token list; everything else is note text.
 /// Schema freestyle words are the silent default: no stroke, no note.
-fn take_stroke<'a>(
-    lower: &'a [String],
-    rest: &'a [&'a str],
+fn take_stroke(
+    lower: &[String],
+    rest: &[&str],
     schema: &FormatSchema,
-) -> (Option<Stroke>, Vec<&'a str>) {
+) -> (Option<Stroke>, Vec<String>) {
     let mut stroke = None;
     let mut words = Vec::new();
     for (i, t) in lower.iter().enumerate() {
@@ -680,18 +681,18 @@ fn take_stroke<'a>(
         if let Some(s) = schema.stroke_of(t) {
             stroke = Some(s);
         } else {
-            words.push(rest[i]);
+            words.push(rest[i].to_owned());
         }
     }
     (stroke, words)
 }
 
 fn join_notes(
-    words: Vec<&str>,
+    words: Vec<String>,
     interval_note: Option<String>,
     tail_annotation: Option<String>,
 ) -> Option<String> {
-    let mut parts: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+    let mut parts: Vec<String> = words;
     if let Some(p) = interval_note {
         parts.push(p);
     }
@@ -907,10 +908,10 @@ fn finish_run_distance(
     count: Option<u32>,
 ) -> Result<Step, Error> {
     let _ = schema;
-    let mut words: Vec<&str> = rest
+    let mut words: Vec<String> = rest
         .iter()
         .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
-        .copied()
+        .map(|t| t.to_string())
         .collect();
     // Trailing pace qualifiers resolve against `run_base` (`400 5K pace`
     // needs a race-pace map — still notes; `@ 85% of 1mi pace` resolves).
@@ -931,12 +932,10 @@ fn finish_run_distance(
         if target.is_none() {
             target = parsed;
         } else if let Some(p) = parsed {
-            let note = format!("@ {p}");
-            words.push(Box::leak(note.into_boxed_str()));
+            words.push(format!("@ {p}"));
         }
         if !leftover.is_empty() {
-            let note = format!("@ {leftover}");
-            words.push(Box::leak(note.into_boxed_str()));
+            words.push(format!("@ {leftover}"));
         }
     }
     let notes = join_notes(words, None, tail_annotation);
@@ -976,18 +975,17 @@ fn finish_run_distance(
 /// `% of 1mi pace` scales pace *down* in speed terms — 85% effort ≈
 /// `run_base / 0.85` secs/km (slower pace, fewer secs would be faster).
 fn parse_target_text(t: &str, w: &Workout) -> (Option<Target>, String) {
-    let mut target: Option<Target> = None;
+    let mut target: Option<(Target, &str)> = None;
     let mut leftover: Vec<&str> = Vec::new();
     // Split `85rpm, 100W` / `110% of 1mi pace, 200 m @ 70%` on commas and
     // `@` (the `4x 200 m @ 110% …, 200 m @ 70% …` shape re-splits on `@`).
-    // Every consumed word is remembered: a beaten cadence word (`85rpm`
-    // when `100W` wins) stays in notes, never silently dropped.
+    // Last-wins: a later target supersedes; the beaten source word stays in
+    // notes, never silently dropped. The winner's own word is not notes.
     let parts: Vec<&str> = t
         .split([',', '@'])
         .map(str::trim)
         .filter(|p| !p.is_empty())
         .collect();
-    let mut seen: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < parts.len() {
         let part = parts[i];
@@ -997,25 +995,16 @@ fn parse_target_text(t: &str, w: &Workout) -> (Option<Target>, String) {
             break;
         }
         if let Some(resolved) = target_word(part, w) {
-            // A stricter target supersedes: the beaten word joins leftover.
-            if let Some(prev) = target.replace(resolved) {
-                leftover.push(Box::leak(format!("@ {prev}").into_boxed_str()));
+            // A later target supersedes: the beaten source word joins leftover.
+            if let Some((_, prev_src)) = target.replace((resolved, part)) {
+                leftover.push(prev_src);
             }
-            seen.push(part);
         } else {
             leftover.push(part);
         }
         i += 1;
     }
-    // Beaten cadence/words (seen but not the winner) stay visible in notes.
-    for s in seen {
-        if !leftover.iter().any(|l| l.contains(s)) {
-            leftover.push(s);
-        }
-    }
-    // Winner-first ordering reads naturally (`@ 100W, 85rpm`); keep the
-    // caller's order otherwise.
-    let _ = seen;
+    let target = target.map(|(t, _)| t);
     (target, leftover.join(", "))
 }
 
