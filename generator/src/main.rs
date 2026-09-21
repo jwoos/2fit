@@ -4,9 +4,31 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
-use fit_core::{Pool, Seconds, Unit};
+use clap::{Parser, ValueEnum};
+use fit_core::{Pool, Seconds, Sport, Unit};
 use fit_generator::fit;
+
+/// Target sport (selects FIT sport/sub-sport; run/bike omit the pool).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+enum SportKind {
+    /// Pool swimming (default; `--pool` applies).
+    #[default]
+    Swim,
+    /// Running (outdoor/street; `--pool` rejected).
+    Run,
+    /// Cycling (outdoor/road; `--pool` rejected).
+    Bike,
+}
+
+impl SportKind {
+    fn as_sport(self) -> Sport {
+        match self {
+            SportKind::Swim => Sport::Swim,
+            SportKind::Run => Sport::Run,
+            SportKind::Bike => Sport::Bike,
+        }
+    }
+}
 
 /// Parse swimdojo workout notation into a .fit file.
 #[derive(Debug, Parser)]
@@ -20,9 +42,13 @@ struct Args {
     #[arg(short, long)]
     out: Option<PathBuf>,
 
-    /// Pool length, e.g. `25yd` or `50m` (default `25yd`).
-    #[arg(long, default_value = "25yd")]
-    pool: String,
+    /// Target sport (default `swim`).
+    #[arg(long, value_enum, default_value = "swim")]
+    sport: SportKind,
+
+    /// Pool length, e.g. `25yd` or `50m` (default `25yd`; swim-only).
+    #[arg(long)]
+    pool: Option<String>,
 
     /// Base pace per 100, e.g. `1:40`; required iff the text uses `@ b`.
     #[arg(long)]
@@ -37,7 +63,7 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     let text = read_input(args.file.as_deref())?;
-    let pool = parse_pool(&args.pool)?;
+    let pool = resolve_pool(args.sport, args.pool.as_deref())?;
     let base = args.base.as_deref().map(parse_base).transpose()?;
     let schema = match args.format.as_deref() {
         Some(path) => {
@@ -48,8 +74,12 @@ fn main() -> Result<()> {
         }
         None => fit_generator::parser::schema::swimdojo(),
     };
-    let workout = fit_generator::parse_with_schema(&text, pool, base, &schema)
+    let mut workout = fit_generator::parse_with_schema(&text, pool, base, &schema)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+    workout.sport = args.sport.as_sport();
+    if !matches!(args.sport, SportKind::Swim) {
+        workout.pool = None;
+    }
     let bytes = fit::to_fit(&workout).map_err(|e| anyhow::anyhow!("{e}"))?;
     match args.out.as_deref() {
         Some(path) => {
@@ -74,6 +104,20 @@ fn read_input(path: Option<&std::path::Path>) -> Result<String> {
                 .context("reading stdin")?;
             Ok(buf)
         }
+    }
+}
+
+/// Resolve the parse-time pool: swim honors `--pool` (default `25yd`);
+/// run/bike reject it (`Workout.pool` stays `None`) and parse bare numbers
+/// in a throwaway 25-yd pool (unit source only — but note: a run parser in
+/// Phase 3 will supply explicit km/mi units instead).
+fn resolve_pool(sport: SportKind, pool: Option<&str>) -> Result<Pool> {
+    match sport {
+        SportKind::Swim => parse_pool(pool.unwrap_or("25yd")),
+        SportKind::Run | SportKind::Bike if pool.is_some() => {
+            bail!("--pool is swim-only; run/bike workouts carry no pool")
+        }
+        _ => Ok(Pool::yards25()),
     }
 }
 
@@ -157,6 +201,30 @@ mod tests {
         assert_eq!(parse_pool("25YD").unwrap().length, 25);
         assert!(parse_pool("pool").is_err());
         assert!(parse_pool("0yd").is_err());
+    }
+
+    #[test]
+    fn sport_kinds_map() {
+        assert_eq!(SportKind::Swim.as_sport(), Sport::Swim);
+        assert_eq!(SportKind::Run.as_sport(), Sport::Run);
+        assert_eq!(SportKind::Bike.as_sport(), Sport::Bike);
+        assert_eq!(SportKind::default(), SportKind::Swim);
+    }
+
+    #[test]
+    fn pool_resolution() {
+        assert_eq!(
+            resolve_pool(SportKind::Swim, None).unwrap(),
+            Pool::yards25()
+        );
+        assert_eq!(
+            resolve_pool(SportKind::Swim, Some("50m")).unwrap(),
+            Pool::meters50()
+        );
+        assert!(resolve_pool(SportKind::Swim, Some("pool")).is_err());
+        assert!(resolve_pool(SportKind::Run, None).is_ok());
+        assert!(resolve_pool(SportKind::Run, Some("25yd")).is_err());
+        assert!(resolve_pool(SportKind::Bike, Some("25yd")).is_err());
     }
 
     #[test]
