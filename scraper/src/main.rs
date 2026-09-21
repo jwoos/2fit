@@ -47,6 +47,19 @@ enum Cmd {
     Fetch {
         /// Workout page URL (or site-local slug from `list`).
         url: String,
+        /// Higdon only: emit one body per plan day (`W1 Tue` …) instead of
+        /// the whole plan; each prints as `=== {title} ===` + body so the
+        /// caller can split into one `.fit` per workout.
+        #[arg(long)]
+        per_day: bool,
+        /// With `--per-day`: write each day body to `<dir>/<slug>.txt`
+        /// instead of stdout (slugified `W1 Tue` title).
+        #[arg(long)]
+        out_dir: Option<std::path::PathBuf>,
+        /// With `--per-day`: skip rest days (`Rest`, `Cross`, race markers)
+        /// instead of emitting (annotation-only) rest-day bodies.
+        #[arg(long)]
+        skip_rest: bool,
     },
     /// Infer a workout-format schema from sample notation files.
     Schema {
@@ -82,7 +95,61 @@ fn main() -> Result<()> {
                 println!("{}\n  {}\n", i.title, i.url);
             }
         }
-        Cmd::Fetch { url } => {
+        Cmd::Fetch {
+            url,
+            per_day,
+            out_dir,
+            skip_rest,
+        } => {
+            if per_day {
+                if !matches!(args.site, SiteKind::Higdon) {
+                    anyhow::bail!(
+                        "--per-day is Higdon-only (other sites fetch one workout per page)"
+                    );
+                }
+                if skip_rest && out_dir.is_none() {
+                    anyhow::bail!(
+                        "--skip-rest needs --out-dir (stdout keeps rest-day markers inline)"
+                    );
+                }
+                let days = Higdon::new().fetch_days(&url)?;
+                let days: Vec<_> = if skip_rest {
+                    days.into_iter()
+                        .filter(|w| {
+                            !fit_scraper::site::higdon::is_day_marker(
+                                w.body.trim().trim_start_matches("—>").trim(),
+                            ) && !w.body.trim_start_matches("—>").contains(" Rest")
+                        })
+                        .collect()
+                } else {
+                    days
+                };
+                match out_dir {
+                    Some(dir) => {
+                        std::fs::create_dir_all(&dir)
+                            .map_err(|e| anyhow::anyhow!("creating {}: {e}", dir.display()))?;
+                        for w in &days {
+                            let slug = w
+                                .title
+                                .rsplit("— ")
+                                .next()
+                                .unwrap_or(&w.title)
+                                .to_ascii_lowercase()
+                                .replace(' ', "-");
+                            let path = dir.join(format!("{slug}.txt"));
+                            std::fs::write(&path, &w.body)
+                                .map_err(|e| anyhow::anyhow!("writing {}: {e}", path.display()))?;
+                        }
+                        eprintln!("wrote {} day files to {}", days.len(), dir.display());
+                    }
+                    None => {
+                        for w in &days {
+                            println!("=== {} ===\n{}", w.title, w.body);
+                        }
+                    }
+                }
+                return Ok(());
+            }
             let w = match args.site {
                 SiteKind::Swimdojo => Swimdojo::new().fetch(&normalize_swimdojo(&url))?,
                 SiteKind::Myswimpro => Myswimpro::new().fetch(&url)?,

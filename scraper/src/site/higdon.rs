@@ -235,11 +235,52 @@ impl Site for Higdon {
     }
 }
 
-/// One plan week → notation lines: `Week N` + `Mon: <cell>` … + `—>Rest
-/// days: …` for day markers. `tables` holds both unit views; the miles
-/// table wins (imperial source; km cells are conversions of it).
+impl Higdon {
+    /// Fetch a plan page as per-day workouts: one [`ScrapedWorkout`] per
+    /// grid cell, titled `{plan} — {day_label}` (`Novice 1 Marathon —
+    /// W1 Tue`). Markers become rest-day bodies (title kept, body parses
+    /// to zero steps); empty cells are skipped.
+    pub fn fetch_days(&self, url: &str) -> Result<Vec<ScrapedWorkout>, SiteError> {
+        let html = self.get(url)?;
+        let tables = Self::parse_plan_tables(&html);
+        if tables.is_empty() {
+            return Err(SiteError(format!("no training grid in {url}")));
+        }
+        let title = Self::page_title(&html);
+        let title = if title.is_empty() {
+            url.to_owned()
+        } else {
+            title
+        };
+        let days = plan_days(&tables)
+            .into_iter()
+            .map(|(day, cell)| ScrapedWorkout {
+                title: format!("{title} — {day}"),
+                url: url.to_owned(),
+                body: day_body(&day, &cell),
+            })
+            .collect::<Vec<_>>();
+        if days.is_empty() {
+            return Err(SiteError(format!("empty training grid in {url}")));
+        }
+        Ok(days)
+    }
+}
+
+/// Day names in grid order (Mon..Sun).
+pub const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/// One day's workout: `(day_label, cell)`, e.g. `("Tue W1", "3 mi run")`.
+/// Markers (`Rest`, `Cross`, races) are included verbatim — the caller
+/// decides (skip, annotate, or split rest-day bodies).
+pub type PlanDay = (String, String);
+
+/// One plan week → notation lines.
+///
+// `Week N` + bare cells in Mon..Sun order + `—>Rest days: …` for day
+// markers. `tables` holds both unit views; the miles table wins (imperial
+// source; km cells are conversions of it).
 pub fn normalize_weeks(tables: &[PlanTable]) -> String {
-    const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     let mi = tables.iter().find(|(u, _)| u == "mi").or(tables.first());
     let Some((_, weeks)) = mi else {
         return String::new();
@@ -269,9 +310,41 @@ pub fn normalize_weeks(tables: &[PlanTable]) -> String {
     body
 }
 
-/// A grid cell → notation: `3 mi run` verbatim; bare `6` → `6 mi` (miles
-/// table; the km table's `9.7` → `9.7 km` handled by the caller choosing
-/// the miles view); whitespace collapsed.
+/// A plan as per-day workouts, in grid order: `(day_label, cell)` with
+/// `day_label` like `"W1 Tue"`. Day markers (`Rest`, `Cross`, race names)
+/// are included verbatim so per-day fetch can emit rest-day bodies too
+/// (a `.fit` per workout: a rest day is a workout with no steps, or the
+/// caller skips it — see `fetch_days`).
+pub fn plan_days(tables: &[PlanTable]) -> Vec<PlanDay> {
+    let mi = tables.iter().find(|(u, _)| u == "mi").or(tables.first());
+    let Some((_, weeks)) = mi else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (week_no, cells) in weeks {
+        for (day, cell) in DAYS.iter().zip(cells.iter()) {
+            let cell = normalize_cell(cell);
+            if cell.is_empty() {
+                continue;
+            }
+            out.push((format!("W{week_no} {day}"), cell));
+        }
+    }
+    out
+}
+
+/// One `(day_label, cell)` → notation body: one step line, or a rest-day
+/// annotation body (`—>Mon Rest`) when the cell is a day marker. Both
+/// parse: the marker body yields zero steps (annotation with no step).
+pub fn day_body(day_label: &str, cell: &str) -> String {
+    if is_day_marker(cell) {
+        format!("—>{day_label} {cell}\n")
+    } else {
+        format!("{cell}\n")
+    }
+}
+/// One grid cell → notation: `3 mi run` verbatim; bare `6` → `6 mi`
+/// (miles table); whitespace collapsed.
 pub fn normalize_cell(cell: &str) -> String {
     let cell = cell.split_whitespace().collect::<Vec<_>>().join(" ");
     if cell.is_empty() {

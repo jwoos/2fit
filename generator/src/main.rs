@@ -117,6 +117,11 @@ struct Args {
     /// run, `zwift` for bike.
     #[arg(long, value_name = "PATH|PRESET")]
     format: Option<String>,
+
+    /// Workout name override (FIT `wkt_name`). Useful with per-day Higdon
+    /// bodies, where the day label (`W1 Tue`) would otherwise be lost.
+    #[arg(long)]
+    name: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -134,6 +139,9 @@ fn main() -> Result<()> {
     };
     if !matches!(args.sport, SportKind::Swim) {
         workout.pool = None;
+    }
+    if let Some(name) = args.name {
+        workout.name = Some(name);
     }
     let bytes = fit::to_fit(&workout).map_err(|e| anyhow::anyhow!("{e}"))?;
     match args.out.as_deref() {

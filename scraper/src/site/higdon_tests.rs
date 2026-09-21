@@ -88,6 +88,45 @@ fn normalize_weeks_parses() {
 }
 
 #[test]
+fn plan_days_split_per_workout() {
+    let tables = Higdon::parse_plan_tables(NOVICE1);
+    let days = plan_days(&tables);
+    // 18 weeks × 7 days = 126 cells, none empty on Novice 1.
+    assert_eq!(days.len(), 126);
+    assert_eq!(days[0], ("W1 Mon".to_owned(), "Rest".to_owned()));
+    assert_eq!(days[1], ("W1 Tue".to_owned(), "3 mi run".to_owned()));
+    assert_eq!(days[5], ("W1 Sat".to_owned(), "6 mi".to_owned()));
+    // Race marker kept verbatim (caller decides: skip or annotate).
+    assert!(
+        days.iter()
+            .any(|(d, c)| c == "Half Marathon" && d == "W8 Sun")
+    );
+    // Bodies parse: a work day → 1 step; a rest day → 0 steps.
+    let schema = fit_generator::parser::schema::higdon_run();
+    let parse = |body: &str| {
+        fit_generator::parser::swimdojo::parse_with_schema(
+            body,
+            fit_core::Pool::yards25(),
+            None,
+            &schema,
+        )
+        .unwrap()
+    };
+    assert_eq!(parse(&day_body("W1 Tue", "3 mi run")).flat_steps().len(), 1);
+    assert_eq!(parse(&day_body("W1 Sat", "6 mi")).flat_steps().len(), 1);
+    assert_eq!(parse(&day_body("W1 Mon", "Rest")).flat_steps().len(), 0);
+    assert_eq!(
+        parse(&day_body("W8 Sun", "Half Marathon"))
+            .flat_steps()
+            .len(),
+        0
+    );
+    // fetch_days titles carry plan + day.
+    assert_eq!(day_body("W1 Tue", "3 mi run"), "3 mi run\n");
+    assert_eq!(day_body("W1 Mon", "Rest"), "—>W1 Mon Rest\n");
+}
+
+#[test]
 fn day_markers() {
     for m in [
         "Rest",
