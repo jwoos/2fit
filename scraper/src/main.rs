@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use fit_scraper::site::{ListFilter, Myswimpro, Site, Swimdojo};
+use fit_scraper::site::{Higdon, ListFilter, Myswimpro, Site, Swimdojo};
 
 /// Which workout site to scrape.
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -11,9 +11,11 @@ enum SiteKind {
     Swimdojo,
     /// myswimpro.com blog (WordPress API, Workout-of-the-Week).
     Myswimpro,
+    /// halhigdon.com training plans (static plan grids, run).
+    Higdon,
 }
 
-/// Scrape swim workouts (swimdojo.com or myswimpro.com blog).
+/// Scrape workouts (swimdojo.com, myswimpro.com blog, or halhigdon.com plans).
 #[derive(Debug, Parser)]
 #[command(name = "2fit-scrape", version)]
 struct Args {
@@ -74,6 +76,7 @@ fn main() -> Result<()> {
             let items = match args.site {
                 SiteKind::Swimdojo => Swimdojo::new().list(&filter)?,
                 SiteKind::Myswimpro => Myswimpro::new().list(&filter)?,
+                SiteKind::Higdon => Higdon::new().list(&filter)?,
             };
             for i in items {
                 println!("{}\n  {}\n", i.title, i.url);
@@ -83,6 +86,7 @@ fn main() -> Result<()> {
             let w = match args.site {
                 SiteKind::Swimdojo => Swimdojo::new().fetch(&normalize_swimdojo(&url))?,
                 SiteKind::Myswimpro => Myswimpro::new().fetch(&url)?,
+                SiteKind::Higdon => Higdon::new().fetch(&url)?,
             };
             print!("{}", w.body);
         }

@@ -1,9 +1,11 @@
-//! One module per target site behind a shared trait (swimdojo, myswimpro).
+//! One module per target site behind a shared trait (swimdojo, myswimpro, higdon).
 
+pub mod higdon;
 pub mod myswimpro;
 pub mod swimdojo;
 pub mod traits;
 
+pub use higdon::Higdon;
 pub use myswimpro::Myswimpro;
 pub use swimdojo::Swimdojo;
 pub use traits::{ListFilter, ListingItem, ScrapedWorkout, Site, SiteError};
