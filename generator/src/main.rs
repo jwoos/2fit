@@ -128,6 +128,14 @@ struct Args {
     #[arg(long, value_name = "WATTS")]
     ftp: Option<String>,
 
+    /// Named race pace, repeatable: `--race-pace 5k=4:50/km
+    /// --race-pace marathon=5:30/mi` (pace values take the same
+    /// `m:ss/km|/mi` shape as `--run-base`). Resolves trailing/named
+    /// targets (`8 x 400 5K pace`, `20min @ marathon pace`) to `Target::Pace`.
+    /// Unknown names stay notes.
+    #[arg(long, value_name = "NAME=PACE")]
+    race_pace: Vec<String>,
+
     /// Workout-format schema: a JSON file (see `fit_scraper schema`), or a
     /// built-in preset (`swimdojo`, `myswimpro`, `higdon-run`, `zwift`).
     /// Default follows `--sport`: `swimdojo` for swim, `higdon-run` for
@@ -149,7 +157,7 @@ fn main() -> Result<()> {
             if args.file.is_some() {
                 bail!("--zwo and --file are exclusive (zwo skips text parsing)");
             }
-            for flag in ["--pool", "--base", "--run-base", "--format"] {
+            for flag in ["--pool", "--base", "--run-base", "--format", "--race-pace"] {
                 if std::env::args().any(|a| a == flag || a.starts_with(&format!("{flag}="))) {
                     bail!("--zwo skips text parsing ({flag} ignored)");
                 }
@@ -166,10 +174,16 @@ fn main() -> Result<()> {
             let pool = resolve_pool(args.sport, args.pool.as_deref())?;
             let base = args.base.as_deref().map(parse_base).transpose()?;
             let run_base = args.run_base.as_deref().map(parse_pace).transpose()?;
+            let race_paces = args
+                .race_pace
+                .iter()
+                .map(|s| parse_race_pace(s))
+                .collect::<Result<Vec<_>>>()?;
             let schema = resolve_schema(args.format.as_deref(), args.sport)?;
             let thresholds = fit_generator::parser::swimdojo::Thresholds {
                 run_base,
                 bike_ftp: ftp,
+                race_paces: race_paces.into_iter().collect(),
             };
             let mut w =
                 fit_generator::parse_with_thresholds(&text, pool, base, thresholds, &schema)
@@ -345,6 +359,19 @@ fn parse_pace(s: &str) -> Result<fit_core::Pace> {
     Ok(fit_core::Pace::from_secs_per_km(per_km))
 }
 
+/// `NAME=PACE` (`5k=4:50/km`): key normalized by [`fit_core::pace_key`]
+/// so `5K`, `5k`, `5-K` all match `5K pace` text.
+fn parse_race_pace(s: &str) -> Result<(String, fit_core::Pace)> {
+    let (name, pace) = s
+        .split_once('=')
+        .ok_or_else(|| anyhow::anyhow!("unparseable race pace '{s}': want e.g. 5k=4:50/km"))?;
+    let key = fit_core::pace_key(name);
+    if key.is_empty() {
+        bail!("unparseable race pace '{s}': name must be alphanumeric");
+    }
+    Ok((key, parse_pace(pace)?))
+}
+
 /// Plain watts (`250`).
 fn parse_ftp(s: &str) -> Result<u32> {
     let watts: u32 = s
@@ -471,5 +498,18 @@ mod tests {
         assert_eq!(parse_base("45").unwrap(), Seconds::secs(45));
         assert!(parse_base("1:99").is_err());
         assert!(parse_base("fast").is_err());
+    }
+
+    #[test]
+    fn race_pace_flags() {
+        let (key, pace) = parse_race_pace("5k=4:50/km").unwrap();
+        assert_eq!(key, "5k");
+        assert_eq!(pace, fit_core::Pace::from_secs_per_km(290));
+        // Key normalizes (`5K` → `5k`); pace takes /mi too.
+        let (key, _) = parse_race_pace("5K=8:00/mi").unwrap();
+        assert_eq!(key, "5k");
+        assert!(parse_race_pace("5k").is_err());
+        assert!(parse_race_pace("=4:50/km").is_err());
+        assert!(parse_race_pace("5k=fast").is_err());
     }
 }

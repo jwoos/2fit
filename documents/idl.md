@@ -28,7 +28,7 @@ with the evidence behind each decision (Guideline 4). Grammar source:
 | `Step` | `Distance \| Timed \| Repeat \| Breakdown \| Rest { secs } \| Recovery` | one workout line. `distance_value()` = 0 for Rest/Timed (rests don't count toward swum distance; timed work has no distance). |
 | `SectionLabel` | `None* \| WarmUp \| Main \| Set(u32) \| CoolDown` | swimdojo prints "Warm Up", "Set N", italic subtotals. |
 | `Section` | `{ label, steps, subtotal? }` | subtotal = the italic set total if the source states one. |
-| `Workout` | `{ name?, description?, sport=Swim, pool?, base100?, sections }` | `base100` = swimmer's pace per 100 **in pool units**, if known. `pool: None` for run/bike (encoder omits `pool_length`). |
+| `Workout` | `{ name?, description?, sport=Swim, pool?, base100?, run_base?, bike_ftp?, race_paces?, sections }` | `base100` = swimmer's pace per 100 **in pool units**, if known. `pool: None` for run/bike (encoder omits `pool_length`). `race_paces` = named map (`5k`→pace, key by `pace_key`) resolving `5K pace`/`@ marathon pace` (empty = notes). |
 | `FlatStep` | `{ distance?, time?, stroke?, target?, name?, notes?, intensity }` | repeat/breakdowns expanded, in swum order — what the .fit encoder consumes. `FlatStep.target` parallels `stroke` (swim flattening sets both; timed sets `target` only). |
 
 All types derive `Serialize`/`Deserialize` (schema export + scraper output later).

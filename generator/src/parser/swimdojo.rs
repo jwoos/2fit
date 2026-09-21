@@ -54,14 +54,18 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Athlete thresholds for target resolution (mirrors [`Workout`]'s
-/// `run_base`/`bike_ftp`; passed separately so `parse` signatures stay
-/// swim-shaped — the seed `Workout` carries swim's `base100` only).
-#[derive(Debug, Clone, Copy, Default)]
+/// `run_base`/`bike_ftp`/`race_paces`; passed separately so `parse`
+/// signatures stay swim-shaped — the seed `Workout` carries swim's
+/// `base100` only).
+#[derive(Debug, Clone, Default)]
 pub struct Thresholds {
     /// Run threshold pace (resolves `% of pace` → [`Target::Pace`]).
     pub run_base: Option<Pace>,
     /// Bike FTP watts (resolves `%FTP` → [`Target::Power`]).
     pub bike_ftp: Option<u32>,
+    /// Named race paces, keyed by [`fit_core::pace_key`] (resolves `5K
+    /// pace` → [`Target::Pace`]). Empty = unknown names stay notes.
+    pub race_paces: std::collections::BTreeMap<String, Pace>,
 }
 
 /// Parse swimdojo workout notation into a [`Workout`].
@@ -89,10 +93,11 @@ pub fn parse_with_schema(
     parse_with_thresholds(text, pool, base100, Thresholds::default(), schema)
 }
 
-/// Parse notation with athlete thresholds for `%`-target resolution.
+/// Parse notation with athlete thresholds for `%`/named-target resolution.
 ///
-/// [`parse_with_schema`] is this with no thresholds (all `%`-targets stay
-/// notes); pass `--run-base`/`--ftp` values here to resolve them.
+/// [`parse_with_schema`] is this with no thresholds (all `%`-targets and
+/// named paces stay notes); pass `--run-base`/`--ftp`/`--race-pace` values
+/// here to resolve them.
 pub fn parse_with_thresholds(
     text: &str,
     pool: Pool,
@@ -104,6 +109,7 @@ pub fn parse_with_thresholds(
     w.base100 = base100;
     w.run_base = thresholds.run_base;
     w.bike_ftp = thresholds.bike_ftp;
+    w.race_paces = thresholds.race_paces;
     let mut through: Option<RepeatStep> = None;
 
     for (idx, raw) in text.lines().enumerate() {
@@ -894,7 +900,7 @@ fn suffixed_distance<'a>(
 
 /// Finish a run/bike explicit-unit distance step: `@` text is a target
 /// (parsed with the workout's thresholds), not a swim clock; leftover
-/// target words and pace qualifiers (`5K pace`) stay notes; filler drops.
+/// target words stay notes; filler drops.
 #[allow(clippy::too_many_arguments)]
 fn finish_run_distance(
     w: &Workout,
@@ -908,23 +914,19 @@ fn finish_run_distance(
     count: Option<u32>,
 ) -> Result<Step, Error> {
     let _ = schema;
-    let mut words: Vec<String> = rest
+    // Split the trailing words into target-bearing and note-bearing:
+    // `@`-style pace fragments (`85% of 1mi pace`) live inside one word
+    // (`400 85% of 1mi pace`), so scan word windows: a trailing qualifier
+    // is the longest suffix whose pace-words resolve (`Med pace`,
+    // `5K pace`, `85% of 1mi pace`); the rest stays notes.
+    let words: Vec<&str> = rest
         .iter()
         .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
-        .map(|t| t.to_string())
+        .copied()
         .collect();
-    // Trailing pace qualifiers resolve against `run_base` (`400 5K pace`
-    // needs a race-pace map — still notes; `@ 85% of 1mi pace` resolves).
-    let mut target: Option<Target> = None;
-    words.retain(|word| {
-        if target.is_none()
-            && let Some(t) = trailing_pace_target(word, distance, w.run_base)
-        {
-            target = Some(t);
-            return false;
-        }
-        true
-    });
+    let (mut target, kept) = trailing_pace_target(&words, w);
+    let _ = distance;
+    let mut words: Vec<String> = kept.into_iter().map(str::to_owned).collect();
     if let Some(t) = interval_text
         && !t.is_empty()
     {
@@ -1061,26 +1063,49 @@ fn target_word(part: &str, w: &Workout) -> Option<Target> {
     {
         return Some(Target::Pace(Pace::from_secs_per_km(secs)));
     }
+    // Named race pace (`5K pace`, `marathon pace` — trailing `pace` word
+    // optional): the map key is the joined qualifier (`5k`, `marathon`).
+    // Unknown names stay notes (no flag passed).
+    if low.ends_with("pace") || low.ends_with("paces") {
+        let name: String = low
+            .trim_end_matches(['s', 'e', 'c', 'a', 'p'])
+            .trim_end()
+            .to_owned();
+        if let Some(p) = w.race_pace(&name) {
+            return Some(Target::Pace(p));
+        }
+        // `5kpace` compacted: `pace` suffix is glued (`5kpace`); the two
+        // tokens above (`5K` + `pace`) arrive joined by `parse_target_text`
+        // splitting on commas only — so try the compact key too.
+        if let Some(p) = w.race_pace(&compact) {
+            return Some(Target::Pace(p));
+        }
+    } else if let Some(p) = w.race_pace(&compact) {
+        // Bare name without `pace` (`@ 5k`, `800 @ marathon`).
+        return Some(Target::Pace(p));
+    }
     None
 }
 
-/// Trailing pace qualifier on a distance line (`400 … 5K pace` is named —
-/// still notes; `@ 85% of 1mi pace`-style trailing `% … pace` resolves via
-/// `run_base`). `distance` is unused today (a future race-pace map keys
-/// `5K`-style names off it); kept for the call shape.
-fn trailing_pace_target(word: &str, _distance: Distance, run_base: Option<Pace>) -> Option<Target> {
-    let low = word.to_ascii_lowercase();
-    if !low.contains('%') || !low.contains("pace") {
-        return None;
+/// Trailing pace qualifier on a distance line: the longest trailing word
+/// window that resolves to a target (`Med Pace` → `Med`+`pace` words,
+/// `5K pace`, `85% of 1mi pace`). Returns `(target, kept_words)` — kept
+/// words stay notes. A bare `pace` with no map match stays notes too.
+///
+/// Resolution order per window: named map (`race_paces`), `%`-of-base
+/// (`run_base`), clock (`5:00/km`). First (longest) window that resolves
+/// wins; anything before it is notes.
+fn trailing_pace_target<'a>(words: &[&'a str], w: &Workout) -> (Option<Target>, Vec<&'a str>) {
+    // Try longest suffix first: `800 m Jog At Easy Pace` should test
+    // `jog at easy pace` before `easy pace` (neither resolves without a
+    // map, but a `easy pace` map entry must not shadow a longer match).
+    for start in 0..words.len() {
+        let name = words[start..].join(" ");
+        if let Some(t) = target_word(&name, w) {
+            return (Some(t), words[..start].to_vec());
+        }
     }
-    let pct: u32 = low.split('%').next()?.trim().parse().ok()?;
-    if pct == 0 {
-        return None;
-    }
-    let base = run_base?.as_secs_per_km() as u64;
-    Some(Target::Pace(Pace::from_secs_per_km(
-        (base * 100 / pct as u64) as u32,
-    )))
+    (None, words.to_vec())
 }
 
 /// `m:ss` clock → seconds (`5:00` → 300). `None` on bad shape.
@@ -1467,13 +1492,19 @@ mod tests {
         let thresholds = Thresholds {
             run_base: Some(Pace::from_secs_per_km(300)), // 5:00/km
             bike_ftp: Some(250),
+            race_paces: [
+                ("5k".to_owned(), Pace::from_secs_per_km(290)), // 4:50/km
+                ("marathon".to_owned(), Pace::from_secs_per_km(330)), // 5:30/km
+            ]
+            .into_iter()
+            .collect(),
         };
         let schema = crate::parser::schema::zwift();
         let w = parse_with_thresholds(
             "Warm Up\n20min @ 110% FTP\n5min @ 85% of 1mi pace\n1min @ 250W\n3min @ Z4\n2min @ 95rpm\n10min from 75 to 70W\n",
             pool(),
             None,
-            thresholds,
+            thresholds.clone(),
             &schema,
         )
         .expect("parses");
@@ -1513,6 +1544,80 @@ mod tests {
         // Without thresholds the same lines stay notes (back-compat).
         let w = parse_with_schema("Warm Up\n20min @ 110% FTP\n", pool(), None, &schema).unwrap();
         assert_eq!(w.flat_steps()[0].target, None);
+    }
+
+    #[test]
+    fn named_race_paces_resolve() {
+        use fit_core::Target;
+        use std::collections::BTreeMap;
+        let races: BTreeMap<String, Pace> = [
+            ("5k".to_owned(), Pace::from_secs_per_km(290)),
+            ("marathon".to_owned(), Pace::from_secs_per_km(330)),
+        ]
+        .into_iter()
+        .collect();
+        let with_races = |races: BTreeMap<String, Pace>| Thresholds {
+            run_base: None,
+            bike_ftp: None,
+            race_paces: races,
+        };
+        let schema = crate::parser::schema::zwift();
+        // Trailing qualifier: `8 x 400 5K pace` → map target, no notes.
+        let w = parse_with_thresholds(
+            "Warm Up\n8 x 400 5K pace\n",
+            pool(),
+            None,
+            with_races(races.clone()),
+            &schema,
+        )
+        .unwrap();
+        let flat = w.flat_steps();
+        assert_eq!(flat.len(), 8);
+        for s in &flat {
+            assert_eq!(s.target, Some(Target::Pace(Pace::from_secs_per_km(290))));
+            assert_eq!(s.notes, None);
+        }
+        // Unknown without the map stays notes (back-compat).
+        let w = parse_with_schema("Warm Up\n8 x 400 5K pace\n", pool(), None, &schema).unwrap();
+        let flat = w.flat_steps();
+        assert_eq!(flat[0].target, None);
+        assert_eq!(flat[0].notes.as_deref(), Some("5K pace"));
+        // `@`-target form: `@ marathon pace` resolves; bare `@ 5k` too.
+        let w = parse_with_thresholds(
+            "Warm Up\n20min @ marathon pace\n10min @ 5k\n",
+            pool(),
+            None,
+            with_races(races),
+            &schema,
+        )
+        .unwrap();
+        let flat = w.flat_steps();
+        assert_eq!(
+            flat[0].target,
+            Some(Target::Pace(Pace::from_secs_per_km(330)))
+        );
+        assert_eq!(
+            flat[1].target,
+            Some(Target::Pace(Pace::from_secs_per_km(290)))
+        );
+        // Multi-word qualifier: trailing two-word window (`Med Pace`).
+        let w = parse_with_thresholds(
+            "Warm Up\n1600 m Med Pace\n",
+            pool(),
+            None,
+            with_races(
+                [("med".to_owned(), Pace::from_secs_per_km(310))]
+                    .into_iter()
+                    .collect(),
+            ),
+            &schema,
+        )
+        .unwrap();
+        let flat = w.flat_steps();
+        assert_eq!(
+            flat[0].target,
+            Some(Target::Pace(Pace::from_secs_per_km(310)))
+        );
     }
 
     #[test]

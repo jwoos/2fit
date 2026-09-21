@@ -341,6 +341,17 @@ impl Pace {
     }
 }
 
+/// Normalize a race-pace map key: lowercase alphanumeric only (`5K` →
+/// `5k`, `Half-Marathon` → `halfmarathon`). Stored keys and lookups
+/// ([`Workout::race_pace`]) both go through this, so spelling
+/// differences don't matter.
+pub fn pace_key(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
 impl fmt::Display for Pace {
     /// `m:ss /km`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -890,6 +901,12 @@ pub struct Workout {
     /// The cyclist's FTP in watts, if known. Resolves `%FTP` targets
     /// (`@ 110% FTP`, `from 30 to 70% FTP`) to watts.
     pub bike_ftp: Option<u32>,
+    /// Named race paces, keyed by [`pace_key`] (e.g. `5k` → 4:50/km).
+    /// Resolves trailing/named targets (`400 5K pace`, `@ marathon pace`)
+    /// to [`Target::Pace`]. Empty = unknown names stay notes (back-compat).
+    /// JSON shape: `{"5k": {"0": 290}}` (transparent `Pace(Seconds)`).
+    #[serde(default)]
+    pub race_paces: std::collections::BTreeMap<String, Pace>,
     /// The workout's sections, in swum order.
     pub sections: Vec<Section>,
 }
@@ -929,6 +946,7 @@ impl Workout {
             base100: None,
             run_base: None,
             bike_ftp: None,
+            race_paces: std::collections::BTreeMap::new(),
             sections: Vec::new(),
         }
     }
@@ -951,8 +969,15 @@ impl Workout {
             base100: None,
             run_base: None,
             bike_ftp: None,
+            race_paces: std::collections::BTreeMap::new(),
             sections: Vec::new(),
         }
+    }
+
+    /// Look up a named race pace (`5K`, `marathon`) by [`pace_key`).
+    /// `None` = unknown (caller keeps the words as notes).
+    pub fn race_pace(&self, name: &str) -> Option<Pace> {
+        self.race_paces.get(&pace_key(name)).copied()
     }
 
     /// The wire sub-sport: `sub_sport` when it belongs to `sport`, else the

@@ -80,6 +80,18 @@ vocabulary tables (freestyle/rest/recovery words); `infer` learns the
 run/bike filler (`run`, `tempo`, `fast`, `ride`, `walk`, `jog`, `cross`)
 into `freestyle_words` with swim-only tables honestly gapped.
 
+## Named race paces (2026-09-21; closes the Phase 3 deferral)
+
+`--race-pace NAME=PACE` (repeatable; value = `--run-base` shape
+`m:ss/km|/mi`) fills `Workout.race_paces` (keys via `pace_key`:
+lowercase alphanumeric, so `5K`/`5k`/`5-K` match). Resolution —
+trailing qualifier takes the longest resolving suffix window
+(`1600 m Med Pace` → `med`+`pace`; `8 x 400 5K pace` → `5k`), `@`
+targets try the map after `%`/clock forms (`20min @ marathon pace`,
+bare `@ 5k`). Unknown names stay notes (back-compat; no-flag behavior
+unchanged). Live: `8 x 400 5K pace --race-pace 5k=4:50/km` → 228 B
+`.fit` with SPEED targets (3448 = 1e6/290).
+
 ## Confirmed IDL shapes
 
 - `Sport { Swim, Run, Bike }` + `Workout.sport` (default `Swim`).
