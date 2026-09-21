@@ -30,8 +30,8 @@
 use std::fmt;
 
 use fit_core::{
-    DistanceStep, FormatSchema, IntervalSpec, Pool, RecoveryStep, RepeatStep, Seconds, Section,
-    SectionLabel, Step, Stroke, TechniqueStep, Workout,
+    Distance, DistanceStep, FormatSchema, IntervalSpec, Pool, RecoveryStep, RepeatStep, Seconds,
+    Section, SectionLabel, Step, Stroke, TechniqueStep, TimedStep, Workout,
 };
 
 /// A line of notation that could not be parsed.
@@ -303,6 +303,61 @@ fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Resul
     let first = toks
         .next()
         .ok_or_else(|| err(n, line, "expected a distance"))?;
+    // Leading durations (`35 min tempo run`, `60 min cross`): run/bike work
+    // prescribed by time. A bare `m:ss`/`h:mm:ss` first token is a duration
+    // too (`30:00 easy`). Both become `Step::Timed` with no target — the
+    // trailing words (`tempo`, `fast`, `cross`) stay notes, matching the
+    // Higdon evidence (effort lives in prose, not the cell).
+    if let Some(duration) = leading_duration(first, &mut toks) {
+        let rest: Vec<&str> = toks.collect();
+        let (interval, interval_note) = parse_interval(interval_text, n, line, schema)?;
+        let mut notes = join_notes(
+            rest.iter()
+                .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
+                .copied()
+                .collect(),
+            interval_note,
+            tail_annotation,
+        );
+        if let Some(iv) = interval {
+            notes = Some(match notes {
+                Some(existing) => format!("{existing} {iv}"),
+                None => iv.to_string(),
+            });
+        }
+        let inner = Step::Timed(TimedStep {
+            duration,
+            target: None,
+            intensity: Default::default(),
+            notes,
+        });
+        return match count {
+            None => Ok(inner),
+            Some(c) => Ok(Step::Repeat(RepeatStep {
+                count: c,
+                rest_between: None,
+                inner: vec![inner],
+                notes: None,
+            })),
+        };
+    }
+    // Explicit run/bike units (`3 mi run`, `4.8 km run`, `8 x 400 5K pace`):
+    // the unit beats the pool. Decimal km (`4.8`) parse to whole meters;
+    // `400` with a pace word stays meters (track reps).
+    if let Some(distance) = suffixed_distance(first, &mut toks) {
+        let rest: Vec<&str> = toks.collect();
+        return finish_run_distance(
+            w,
+            line,
+            n,
+            schema,
+            distance,
+            rest,
+            interval_text,
+            tail_annotation,
+            count,
+        );
+    }
     // Unit-suffixed distances (`60m`, `50s`): strip one trailing length
     // letter; the pool supplies the unit, `s` is drill shorthand.
     let first = first.strip_suffix(['m', 'M', 's']).unwrap_or(first);
@@ -587,6 +642,226 @@ fn join_notes(
     }
 }
 
+/// Words that fill run cells but carry no IDL meaning: the sport noun
+/// itself (`run`), filler (`cross` in `60 min cross` — the day marker, kept
+/// as a note only when other words justify it; see below), and pace
+/// qualifiers (`5K pace` is a named effort, not yet a `Target` — Phase 3
+/// keeps it as a note; `run_base` resolution is deferred).
+fn is_run_filler(word: &str) -> bool {
+    matches!(word, "run" | "runs" | "cross" | "x-train" | "xtrain")
+}
+
+/// A leading time token: `<N> min|mins|minute|minutes` (consumes the unit
+/// word from `toks`) or bare `m:ss` / `h:mm:ss`. Returns the duration.
+/// Evidence: Higdon 10K Intermediate cells (`35 min tempo run`,
+/// `60 min cross`, `8 x 400 5K pace` is the distance sibling).
+fn leading_duration<'a>(
+    first: &str,
+    toks: &mut (impl Iterator<Item = &'a str> + Clone),
+) -> Option<Seconds> {
+    if let Some(mins) = numeric(first) {
+        // Peek the unit without consuming on mismatch: collect is avoided
+        // by cloning the iterator (slice-backed, cheap).
+        let mut peek = toks.clone();
+        if let Some(unit) = peek.next()
+            && matches!(
+                unit.to_ascii_lowercase().as_str(),
+                "min" | "mins" | "minute" | "minutes"
+            )
+        {
+            let _ = toks.next();
+            return Some(Seconds::minutes(mins));
+        }
+        return None;
+    }
+    if first.contains(':') && first.chars().all(|c| c.is_ascii_digit() || c == ':') {
+        return time_token(first);
+    }
+    None
+}
+
+/// `m:ss` / `h:mm:ss` → seconds. `None` on bad shape (`sec >= 60`,
+/// empty parts, overflow).
+fn time_token(tok: &str) -> Option<Seconds> {
+    let parts: Vec<&str> = tok.split(':').collect();
+    let (h, m, s) = match parts.as_slice() {
+        [m, s] => (0u32, m.parse::<u32>().ok()?, s.parse::<u32>().ok()?),
+        [h, m, s] => (
+            h.parse::<u32>().ok()?,
+            m.parse::<u32>().ok()?,
+            s.parse::<u32>().ok()?,
+        ),
+        _ => return None,
+    };
+    if m >= 60 || s >= 60 {
+        return None;
+    }
+    h.checked_mul(3600)?
+        .checked_add(m.checked_mul(60)?)?
+        .checked_add(s)
+        .map(Seconds)
+}
+
+/// An explicit run/bike distance starting at `first`, consuming a following
+/// unit word when present. Returns the distance in its own unit (pool is
+/// ignored — the unit beats the pool):
+///
+/// - `3 mi [run]` → miles; `4.8 km [run]` → decimal km → whole meters;
+///   `400 [5K pace]` / `5 x 400` → bare meters (track reps);
+/// - `N` + `m|meter|meters` → meters; `N` + `km|kilometer(s)` → km→m;
+///   `N` + `mi|mile(s)` → miles.
+/// - `None` when `first` is not a run distance (non-numeric, or a bare
+///   integer with no unit/pace context — those stay pool-unit swims).
+fn suffixed_distance<'a>(
+    first: &str,
+    toks: &mut (impl Iterator<Item = &'a str> + Clone),
+) -> Option<Distance> {
+    // Attached suffixes: `400m`, `5km`, `3mi`, `5k` (= km, Higdon `5K pace`
+    // shorthand appears bare too — handled below via lookahead).
+    let low = first.to_ascii_lowercase();
+    for suffix in [
+        "kilometers",
+        "kilometer",
+        "meters",
+        "meter",
+        "miles",
+        "mile",
+        "km",
+        "mi",
+        "m",
+    ] {
+        if let Some(num) = low.strip_suffix(suffix)
+            && !num.is_empty()
+        {
+            if suffix == "km" || suffix.starts_with("kilo") {
+                if num.contains('.') {
+                    return Distance::from_km_decimal(num);
+                }
+                let km: u32 = num.replace(',', "").parse().ok()?;
+                if km == 0 {
+                    return None;
+                }
+                return Some(Distance::meters(km.checked_mul(1000)?));
+            }
+            let unit = if suffix.starts_with("mi") {
+                fit_core::Unit::Miles
+            } else {
+                fit_core::Unit::Meters
+            };
+            let value: u32 = num.replace(',', "").parse().ok()?;
+            if value == 0 {
+                return None;
+            }
+            return Some(Distance { value, unit });
+        }
+    }
+    // `5k` = 5 km (Higdon shorthand, no `m`).
+    if let Some(num) = low.strip_suffix('k')
+        && !num.is_empty()
+        && num
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b == b',' || b == b'.')
+    {
+        if num.contains('.') {
+            return Distance::from_km_decimal(num);
+        }
+        let km: u32 = num.replace(',', "").parse().ok()?;
+        if km == 0 {
+            return None;
+        }
+        return Some(Distance::meters(km.checked_mul(1000)?));
+    }
+    // Separate unit word: `3 mi [run]`, `4.8 km [run]`, `400 m`.
+    let mut peek = toks.clone();
+    let unit_word = peek.next()?.to_ascii_lowercase();
+    match unit_word.as_str() {
+        "mi" | "mile" | "miles" => {
+            let value = numeric(first)?;
+            let _ = toks.next();
+            Some(Distance::miles(value))
+        }
+        "km" | "kilometer" | "kilometers" | "k" => {
+            let _ = toks.next();
+            if first.contains('.') {
+                Distance::from_km_decimal(first)
+            } else {
+                let km = numeric(first)?;
+                Some(Distance::meters(km.checked_mul(1000)?))
+            }
+        }
+        "m" | "meter" | "meters" => {
+            let value = numeric(first)?;
+            let _ = toks.next();
+            Some(Distance::meters(value))
+        }
+        // `8 x 400 5K pace`: bare meters + pace qualifier. The `400` arrives
+        // here after `split_count` peeled `8 x`; `5k`/`5k pace` follows.
+        // (Single `"k"` is covered by the km arm above.)
+        "pace" => {
+            let value = numeric(first)?;
+            Some(Distance::meters(value))
+        }
+        _ => {
+            // Look one further: `400 5K pace` — unit word is `5k`, not `pace`.
+            if unit_word.len() >= 2 {
+                let uw = unit_word.trim_end_matches(['.', ',', ':']);
+                if uw.ends_with('k') && uw[..uw.len() - 1].bytes().all(|b| b.is_ascii_digit()) {
+                    let value = numeric(first)?;
+                    return Some(Distance::meters(value));
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Finish a run/bike explicit-unit distance step: parse `@` target text as
+/// a pace/power note (no `IntervalSpec` — run intervals are targets, not
+/// swim clocks), keep pace qualifiers (`5K pace`) in notes, drop filler.
+#[allow(clippy::too_many_arguments)]
+fn finish_run_distance(
+    _w: &Workout,
+    _line: &str,
+    _n: usize,
+    schema: &FormatSchema,
+    distance: Distance,
+    rest: Vec<&str>,
+    interval_text: Option<&str>,
+    tail_annotation: Option<String>,
+    count: Option<u32>,
+) -> Result<Step, Error> {
+    let _ = schema;
+    let mut words: Vec<&str> = rest
+        .iter()
+        .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
+        .copied()
+        .collect();
+    // `@ ...` after a run distance is a target/note, never a swim interval.
+    if let Some(t) = interval_text
+        && !t.is_empty()
+    {
+        let note = format!("@ {t}");
+        words.push(Box::leak(note.into_boxed_str()));
+    }
+    let notes = join_notes(words, None, tail_annotation);
+    let inner = Step::Distance(DistanceStep {
+        distance,
+        stroke: None,
+        interval: None,
+        intensity: Default::default(),
+        notes,
+    });
+    match count {
+        None => Ok(inner),
+        Some(c) => Ok(Step::Repeat(RepeatStep {
+            count: c,
+            rest_between: None,
+            inner: vec![inner],
+            notes: None,
+        })),
+    }
+}
+
 fn err(n: usize, text: &str, reason: impl Into<String>) -> Error {
     Error {
         line: n,
@@ -603,7 +878,6 @@ mod tests {
     const GOBLIN: &str = include_str!("../../../documents/swimdojo-fixtures/goblin-shark.txt");
     const BOX_CRAB: &str = include_str!("../../../documents/swimdojo-fixtures/box-crab.txt");
     const SEA_OTTER: &str = include_str!("../../../documents/swimdojo-fixtures/sea-otter.txt");
-
     fn pool() -> Pool {
         Pool::yards25()
     }
@@ -953,5 +1227,76 @@ mod tests {
             }
             other => panic!("got {other:?}"),
         }
+    }
+
+    #[test]
+    fn run_cells_with_explicit_units() {
+        // Higdon 10K Intermediate cells (metric + imperial views of one grid).
+        let w = parse(
+            "3 mi run\n4.8 km run\n8 x 400 5K pace\n35 min tempo run\n60 min cross\n30:00 easy\n",
+            pool(),
+            None,
+        )
+        .expect("parses");
+        let flat = w.flat_steps();
+        // 3mi + 4800m + 8×400m + 35:00 + 60:00 + 30:00 = 13 flat steps.
+        assert_eq!(flat.len(), 13);
+        assert_eq!(flat[0].distance, Some(Distance::miles(3)));
+        assert_eq!(flat[1].distance, Some(Distance::meters(4800)));
+        assert_eq!(flat[2].distance, Some(Distance::meters(400)));
+        assert_eq!(flat[2].notes.as_deref(), Some("5K pace"));
+        assert_eq!(flat[10].time, Some(Seconds::minutes(35)));
+        assert_eq!(flat[10].notes.as_deref(), Some("tempo"));
+        assert_eq!(flat[11].time, Some(Seconds::minutes(60)));
+        assert_eq!(flat[12].time, Some(Seconds::minutes(30)));
+        // Pool-unit swims still parse (unit path only triggers on units).
+        let w = parse("100\n4 x 50 @ 1:00\n", pool(), None).expect("parses");
+        assert_eq!(w.flat_steps().len(), 5);
+    }
+
+    #[test]
+    fn run_unit_forms() {
+        // Attached, separate, decimal, and `k` shorthand.
+        for (line, want) in [
+            ("5km\n", Distance::meters(5000)),
+            ("5k\n", Distance::meters(5000)),
+            ("400m\n", Distance::meters(400)),
+            ("3 miles\n", Distance::miles(3)),
+            ("11.3 km run\n", Distance::meters(11_300)),
+        ] {
+            let w = parse(line, pool(), None).expect("parses");
+            match &w.sections[0].steps[0] {
+                Step::Distance(d) => assert_eq!(d.distance, want, "{line:?}"),
+                other => panic!("got {other:?} for {line:?}"),
+            }
+        }
+        // `@` after a run distance is a note, never a swim interval.
+        let w = parse("3 mi run @ 8:00\n", pool(), None).expect("parses");
+        match &w.sections[0].steps[0] {
+            Step::Distance(d) => {
+                assert_eq!(d.distance, Distance::miles(3));
+                assert_eq!(d.interval, None);
+                assert_eq!(d.notes.as_deref(), Some("@ 8:00"));
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decimal_km_helpers() {
+        assert_eq!(
+            Distance::from_km_decimal("4.8"),
+            Some(Distance::meters(4800))
+        );
+        assert_eq!(
+            Distance::from_km_decimal("16.1"),
+            Some(Distance::meters(16_100))
+        );
+        assert_eq!(Distance::from_km_decimal("5"), Some(Distance::meters(5000)));
+        assert_eq!(Distance::from_km_decimal("0.0"), None);
+        assert_eq!(Distance::from_km_decimal("abc"), None);
+        assert_eq!(time_token("35:00"), Some(Seconds::minutes(35)));
+        assert_eq!(time_token("1:02:03"), Some(Seconds::secs(3723)));
+        assert_eq!(time_token("1:99"), None);
     }
 }

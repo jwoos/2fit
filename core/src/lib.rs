@@ -42,7 +42,9 @@ impl fmt::Display for Unit {
     }
 }
 
-/// A distance in a given unit, e.g. 200 meters or 100 yards.
+/// A distance in a given unit. Run/bike values may be fractional
+/// (`4.8 km`, `1.6-4.8 km` ranges); those parse to integer meters
+/// (see `Distance::from_km_decimal`), while `value` stays whole units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Distance {
     /// Numeric distance in `unit`.
@@ -90,6 +92,35 @@ impl Distance {
             value,
             unit: pool.unit,
         }
+    }
+
+    /// Parse a decimal-kilometers token (`4.8`, `11.3`) into whole meters.
+    /// Higdon's metric cells are mile-conversions rounded to 0.1 km, so
+    /// 0.1 km = 100 m is exact — no float involved.
+    pub fn from_km_decimal(tok: &str) -> Option<Self> {
+        let (whole, frac) = match tok.split_once('.') {
+            Some((w, f)) => (w, f),
+            None => (tok, ""),
+        };
+        if whole.is_empty() || !whole.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let whole_m: u32 = whole.parse().ok()?;
+        let frac_m: u32 = match frac.len() {
+            0 => 0,
+            1 if frac.bytes().all(|b| b.is_ascii_digit()) => frac.parse::<u32>().ok()? * 100,
+            2 if frac.bytes().all(|b| b.is_ascii_digit()) => frac.parse::<u32>().ok()? * 10,
+            3 if frac.bytes().all(|b| b.is_ascii_digit()) => frac.parse::<u32>().ok()?,
+            _ => return None,
+        };
+        let value = whole_m.checked_mul(1000)?.checked_add(frac_m)?;
+        if value == 0 {
+            return None;
+        }
+        Some(Self {
+            value,
+            unit: Unit::Meters,
+        })
     }
 }
 
