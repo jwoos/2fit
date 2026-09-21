@@ -19,6 +19,7 @@ ureq = "3"
 rss = "2"
 chrono = "0.4"
 html-escape = "0.2"
+quick-xml = { version = "0.37", features = ["serialize"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -27,7 +27,32 @@ Evidence details:
 - `Rest` / `Cross` cells are whole-day markers, not timed rest steps: they map
   to "no step" (like swim Technique), not to `Step::Rest`.
 
-## Source 2 (fetched 2026-09-21): interval-style run/bike lines
+## Source 3 (surveyed 2026-09-21, NOT scraped): bike workout sources
+
+User asked for a second bike source beyond hand excerpts. Findings:
+
+- **whatsonzwift.com**: richest free Zwift text (`10min from 24 to 60% FTP`,
+  `7x 1min @ 65% FTP, 1min @ 50% FTP`, `2min @ 60rpm, 70% FTP`,
+  `4x 4min @ 100rpm, 75% FTP, 3min @ 85rpm, 50% FTP` — Recovery collection,
+  fetched live). BUT direct `curl` hits Cloudflare challenge (`Just a
+  moment...`, 5378 B); the `markdrayton/wozzwo` repo exists precisely to
+  parse these pages, implying HTML scraping is brittle. No `.zwo`
+  downloads, no API. **Verdict: hostile to scraping; skip.**
+- **TrainerRoad / TrainerDay**: paywalled / Cloudflare-walled. Skip.
+- **ergdb.org**: domain parked (casino review, 2026). Dead. Skip.
+- **`bdcheung/zwift_workouts` (GitHub, 39 `.zwo` files, ★25, no license,
+  stale 2019)**: raw XML fetch works (`SST.zwo`: `Warmup/SteadyState/
+  Cooldown` with `PowerLow/High` FTP fractions). `.zwo` is a *better*
+  bike source than text scraping: structured durations + FTP fractions
+  map 1:1 to `Step::Timed` + `Target::Power` (with `--ftp`) — no NLP.
+  But: no license + stale + one author's collection. **Verdict: format
+  reference + offline test corpus (attribute), not a scraped `Site`.**
+- **Recommendation**: bike ingestion = `.zwo` file import
+  (`2fit-gen --zwo file.zwo --ftp 250` → IDL → `.fit`), using the
+  `zwift-workout-file-reference` schema (h4l repo) for the element map
+  (`Warmup/Cooldown/SteadyState/Intervals/FreeRide` + `Power`,
+  `PowerLow/High`, `Cadence`). No new scraper until a licensed,
+  fetchable corpus appears. Hand Zwift excerpts stay the text fixtures.
 
 Confirmed against real sites (both fetched live; excerpts in fixtures):
 

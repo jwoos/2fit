@@ -83,9 +83,15 @@ impl SubSportKind {
 #[derive(Debug, Parser)]
 #[command(name = "2fit-gen", version)]
 struct Args {
-    /// Workout text file (`-` or omitted = stdin).
+    /// Workout text file (`-` or omitted = stdin). Ignored with `--zwo`.
     #[arg(short, long)]
     file: Option<PathBuf>,
+
+    /// Zwift `.zwo` workout file (structured bike/run import; skips text
+    /// parsing, `--format`, `--pool`, `--base`, `--run-base`). `--ftp`
+    /// resolves its FTP fractions (default 250 W).
+    #[arg(long, value_name = "FILE.zwo")]
+    zwo: Option<PathBuf>,
 
     /// Output .fit path (omitted = stdout).
     #[arg(short, long)]
@@ -137,28 +143,50 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let text = read_input(args.file.as_deref())?;
-    let pool = resolve_pool(args.sport, args.pool.as_deref())?;
-    let base = args.base.as_deref().map(parse_base).transpose()?;
-    let run_base = args.run_base.as_deref().map(parse_pace).transpose()?;
     let ftp = args.ftp.as_deref().map(parse_ftp).transpose()?;
-    let schema = resolve_schema(args.format.as_deref(), args.sport)?;
-    let thresholds = fit_generator::parser::swimdojo::Thresholds {
-        run_base,
-        bike_ftp: ftp,
+    let mut workout = match args.zwo.as_deref() {
+        Some(path) => {
+            if args.file.is_some() {
+                bail!("--zwo and --file are exclusive (zwo skips text parsing)");
+            }
+            for flag in ["--pool", "--base", "--run-base", "--format"] {
+                if std::env::args().any(|a| a == flag || a.starts_with(&format!("{flag}="))) {
+                    bail!("--zwo skips text parsing ({flag} ignored)");
+                }
+            }
+            let xml = std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let mut w = fit_generator::parser::zwo::parse_zwo(&xml, ftp)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            w.bike_ftp = ftp;
+            w
+        }
+        None => {
+            let text = read_input(args.file.as_deref())?;
+            let pool = resolve_pool(args.sport, args.pool.as_deref())?;
+            let base = args.base.as_deref().map(parse_base).transpose()?;
+            let run_base = args.run_base.as_deref().map(parse_pace).transpose()?;
+            let schema = resolve_schema(args.format.as_deref(), args.sport)?;
+            let thresholds = fit_generator::parser::swimdojo::Thresholds {
+                run_base,
+                bike_ftp: ftp,
+            };
+            let mut w =
+                fit_generator::parse_with_thresholds(&text, pool, base, thresholds, &schema)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+            w.run_base = run_base;
+            w.bike_ftp = ftp;
+            w.sport = args.sport.as_sport();
+            if !matches!(args.sport, SportKind::Swim) {
+                w.pool = None;
+            }
+            w
+        }
     };
-    let mut workout = fit_generator::parse_with_thresholds(&text, pool, base, thresholds, &schema)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    workout.run_base = run_base;
-    workout.bike_ftp = ftp;
-    workout.sport = args.sport.as_sport();
     workout.sub_sport = match args.sub_sport {
         Some(s) => s.as_sub_sport(),
         None => Workout::default_sub_sport(workout.sport),
     };
-    if !matches!(args.sport, SportKind::Swim) {
-        workout.pool = None;
-    }
     if let Some(name) = args.name {
         workout.name = Some(name);
     }
