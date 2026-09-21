@@ -92,6 +92,29 @@ bare `@ 5k`). Unknown names stay notes (back-compat; no-flag behavior
 unchanged). Live: `8 x 400 5K pace --race-pace 5k=4:50/km` → 228 B
 `.fit` with SPEED targets (3448 = 1e6/290).
 
+## Ramp expansion (2026-09-21; closes the steady-midpoint deferral)
+
+Ramps expand to per-minute `TimedStep`s (user choice): `ceil(dur/60s)`
+steps, full 60 s minutes first with the remainder last (`90s` → 60+30),
+watts interpolate linearly `lo + (hi−lo)×i/(n−1)` (1-step ramp = midpoint).
+Each step's notes carry the full range (`from 30 to 70% FTP`).
+
+- Text: `10min from 75 to 70W` → 10×1:00 @ 75…70 W; `5min from 30 to
+  70% FTP` → 5 steps 75→175 W (`--ftp 250`); `20min @ from 30 to 70%
+  FTP` (the `@` side) expands the same. Shared-unit endpoints: bare `30`
+  beside `%` in FTP context = 30% FTP (not 30 W); explicit `W` always
+  watts. Ungated `%FTP` (no `--ftp`) stays one notes step (back-compat).
+  Live: `10min from 75 to 70W` → 467 B `.fit` (10 steps).
+- `.zwo`: `<Ramp Duration PowerLow/High>` → same expansion
+  (`label: ramp {lo}-{hi}W` in notes); degenerate (one/no bound) stays
+  one steady step. `Warmup`/`Cooldown` ranges keep the old midpoint +
+  range-notes behavior (steady by format, not ramps).
+- Drive-by fix: `split_count` rewritten anchored-at-start
+  (digits-then-separator only) — `10min` no longer parses as count
+  `10` × `min`, which the ramp work exposed (`10min from…` → 1 step,
+  not 10). `5x60m`/`4 x 100`/`4×50` unchanged; `3x through:` still a
+  repeat-block marker.
+
 ## Confirmed IDL shapes
 
 - `Sport { Swim, Run, Bike }` + `Workout.sport` (default `Swim`).

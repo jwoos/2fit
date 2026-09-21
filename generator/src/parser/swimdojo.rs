@@ -30,8 +30,9 @@
 use std::fmt;
 
 use fit_core::{
-    Distance, DistanceStep, FormatSchema, IntervalSpec, Pace, Pool, RecoveryStep, RepeatStep,
-    Seconds, Section, SectionLabel, Step, Stroke, Target, TechniqueStep, TimedStep, Workout,
+    Distance, DistanceStep, FormatSchema, Intensity, IntervalSpec, Pace, Pool, RecoveryStep,
+    RepeatStep, Seconds, Section, SectionLabel, Step, Stroke, Target, TechniqueStep, TimedStep,
+    Workout,
 };
 
 /// A line of notation that could not be parsed.
@@ -344,6 +345,29 @@ fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Resul
     // Higdon evidence (effort lives in prose, not the cell).
     if let Some(duration) = leading_duration(first, &mut toks) {
         let rest: Vec<&str> = toks.collect();
+        // Text ramps (`10min from 75 to 70W`, `5min from 30 to 70% FTP`):
+        // expand to per-minute steps (interpolated watts) instead of one
+        // steady midpoint. The full range stays in each step's notes.
+        let rest_owned: Vec<String> = rest
+            .iter()
+            .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
+            .map(|s| s.to_string())
+            .collect();
+        let tail = ramp_tail(&rest_owned);
+        if let Some(ramp_words) = tail {
+            let ramp = parse_power_ramp(ramp_words, duration, w);
+            if let Some(ramp) = ramp {
+                let prefix: Vec<String> = rest_owned[..rest_owned.len() - ramp_words.len()]
+                    .iter()
+                    .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
+                    .cloned()
+                    .collect();
+                return timed_or_repeat(
+                    expand_ramp(&ramp, prefix.join(" "), tail_annotation),
+                    count,
+                );
+            }
+        }
         // `@` after a *duration* is a target (`1min @ 85rpm, 100W`,
         // `20min @ 110% FTP`), never a swim interval — parse it with the
         // workout's thresholds (`bike_ftp`/`run_base`) instead of
@@ -351,6 +375,30 @@ fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Resul
         // `take_time_prefix("85rpm")` yields 85 + tail `rpm`).
         if interval_text.is_some_and(|t| !t.is_empty()) {
             let t = interval_text.unwrap_or("").trim();
+            // `20min @ from 30 to 70% FTP`: the `@` side is a ramp —
+            // try it before generic target parsing (which keeps `from…`
+            // as notes). A bare `@ from…` carries no `@`-target words.
+            if let Some(after) = t.strip_prefix("from").map(str::trim).or_else(|| {
+                t.strip_prefix("FROM")
+                    .or_else(|| t.strip_prefix("From"))
+                    .map(str::trim)
+            }) {
+                let ramp_words: Vec<String> = std::iter::once("from")
+                    .chain(after.split_whitespace())
+                    .map(str::to_owned)
+                    .collect();
+                if let Some(ramp) = parse_power_ramp(&ramp_words, duration, w) {
+                    let prefix: Vec<String> = rest
+                        .iter()
+                        .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
+                        .map(|t| t.to_string())
+                        .collect();
+                    return timed_or_repeat(
+                        expand_ramp(&ramp, prefix.join(" "), tail_annotation),
+                        count,
+                    );
+                }
+            }
             let (target, leftover) = parse_target_text(t, w);
             let mut words: Vec<String> = rest
                 .iter()
@@ -378,14 +426,32 @@ fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Resul
             };
         }
         let (interval, interval_note) = parse_interval(interval_text, n, line, schema)?;
-        let mut notes = join_notes(
-            rest.iter()
-                .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
-                .map(|t| t.to_string())
-                .collect(),
-            interval_note,
-            tail_annotation,
-        );
+        let prefix: Vec<String> = rest
+            .iter()
+            .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
+            .map(|t| t.to_string())
+            .collect();
+        // Ramp without `@` (`10min from 75 to 70W` arrives here when the
+        // `from` tail sits after the duration words): same expansion.
+        if let Some(ramp_words) = ramp_tail(&prefix)
+            && let Some(ramp) = parse_power_ramp(ramp_words, duration, w)
+        {
+            let head: Vec<String> = prefix[..prefix.len() - ramp_words.len()].to_vec();
+            let mut steps = expand_ramp(&ramp, head.join(" "), None);
+            if let Some(note) = interval_note {
+                for s in &mut steps {
+                    if let Step::Timed(t) = s {
+                        t.notes = Some(match t.notes.take() {
+                            Some(prev) => format!("{prev} {note}"),
+                            None => note.clone(),
+                        });
+                    }
+                }
+            }
+            let steps = attach_tail(steps, tail_annotation);
+            return timed_or_repeat(steps, count);
+        }
+        let mut notes = join_notes(prefix, interval_note, tail_annotation);
         if let Some(iv) = interval {
             notes = Some(match notes {
                 Some(existing) => format!("{existing} {iv}"),
@@ -538,40 +604,54 @@ fn split_arrow<'a>(
 /// Peel an `N x ` / `Nx` / `N×M` count prefix, e.g. `4 x 100` → `(4, "100")`.
 /// The schema's separator is tried first (` x ` for swimdojo, `×` for
 /// myswimpro); spaceless `Nx` and `N×M` forms always work.
+///
+/// A count is digits-then-`x` at the very start: `10min` (duration unit)
+/// and `max effort` (word) never count. `3x through:` has no digit after
+/// `x` → not a count (repeat-block marker, handled by `through_count`).
 fn split_count<'a>(body: &'a str, schema: &FormatSchema) -> (Option<u32>, &'a str) {
-    if let Some((n, rest)) = body.split_once(schema.count_separator.as_str())
-        && let Some(count) = numeric(n)
+    // Digits, optional spaces, then `x`/`×` — anchored at the start.
+    // A count needs the separator glued or spaced *as a separator*:
+    // `4 x 100` / `5x60m` / `4×50` count; `10min` (unit) and
+    // `max effort` (word) never count.
+    let digits = body
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        return (None, body);
+    }
+    let after_digits = &body[digits.len()..];
+    // Spaced ` x ` separator.
+    if let Some(tail) = after_digits
+        .strip_prefix(" x ")
+        .or_else(|| after_digits.strip_prefix(" × "))
     {
-        return (Some(count), rest.trim_start());
+        let Some(count) = numeric(&digits) else {
+            return (None, body);
+        };
+        return (Some(count), tail.trim_start());
     }
-    for sep in [" x ", "×", "x"] {
-        if sep == schema.count_separator {
-            continue;
-        }
-        if let Some((n, rest)) = body.split_once(sep)
-            && let Some(count) = numeric(n)
-        {
-            // ` x `/`×` need nothing more; bare `x` must not split words
-            // (`6×50` is fine, `max effort` is not a count).
-            if sep != "x" || rest.starts_with(char::is_whitespace) || n.contains('×') {
-                return (Some(count), rest.trim_start());
-            }
-        }
+    // Schema separator when it starts with the digits (myswimpro `×`).
+    if schema.count_separator != " x "
+        && let Some(tail) = after_digits.strip_prefix(schema.count_separator.as_str())
+    {
+        let Some(count) = numeric(&digits) else {
+            return (None, body);
+        };
+        return (Some(count), tail.trim_start());
     }
-    if let Some(pos) = body.find(['x', '×']) {
-        let (head, tail) = body.split_at(pos);
-        // Spaceless `NxM` (`5x60m`): the distance may carry a unit suffix.
-        let head_digits = head.chars().all(|c: char| c.is_ascii_digit()) && !head.is_empty();
-        if head_digits && let Some(count) = numeric(head) {
-            let after = tail[1..].trim_start();
-            // `5x60m …` → distance token `60m` (suffix stripped below);
-            // `3x through:` has no digit after `x` → not a count.
-            if after.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                return (Some(count), after);
+    // Glued `x`/`×`: only with a digit next (`5x60m` yes; `10min`,
+    // `3x through:` no).
+    for sep in ['x', '×'] {
+        if let Some(tail) = after_digits.strip_prefix(sep) {
+            let next = tail.trim_start();
+            if !next.starts_with(|c: char| c.is_ascii_digit()) {
+                return (None, body);
             }
-            if tail.starts_with(char::is_whitespace) {
-                return (Some(count), body[pos + 1..].trim_start());
-            }
+            let Some(count) = numeric(&digits) else {
+                return (None, body);
+            };
+            return (Some(count), next);
         }
     }
     (None, body)
@@ -1008,6 +1088,174 @@ fn parse_target_text(t: &str, w: &Workout) -> (Option<Target>, String) {
     }
     let target = target.map(|(t, _)| t);
     (target, leftover.join(", "))
+}
+
+/// A power ramp over `duration`: watts interpolate linearly from `lo` to
+/// `hi` across per-minute steps ([`expand_ramp`]). `lo`/`hi` are resolved
+/// watts (FTP fractions already multiplied); `label` is the source words
+/// (`from 30 to 70% FTP`), kept in each step's notes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PowerRamp {
+    /// Total ramp duration.
+    pub duration: Seconds,
+    /// Starting watts.
+    pub lo: u32,
+    /// Ending watts.
+    pub hi: u32,
+    /// Source words (`from 30 to 70% FTP`).
+    pub label: String,
+}
+
+/// Expand a [`PowerRamp`] into per-minute [`Step::Timed`] steps
+/// (`ceil(duration / 60s)` steps; full minutes first, the remainder last).
+/// Step `i` of `n` targets `lo + (hi − lo) × i / (n − 1)` (rounded;
+/// a 1-step ramp holds the midpoint). Each step notes
+/// `{prefix} {label}` (prefix may be empty: `from 30 to 70% FTP`).
+/// `tail` appends to every step (the `-->` annotation path).
+pub fn expand_ramp(ramp: &PowerRamp, prefix: String, tail: Option<String>) -> Vec<Step> {
+    let total = ramp.duration.as_secs().max(1);
+    let n = total.div_ceil(60).max(1);
+    let mut out = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        // Full 60 s minutes first; the last step takes the remainder
+        // (`90s` → 60 + 30, not 45 + 45 — watches tick whole minutes).
+        let len = if i + 1 < n { 60 } else { total - 60 * i };
+        let watts = if n == 1 {
+            (ramp.lo + ramp.hi) / 2
+        } else {
+            let span = ramp.hi as i64 - ramp.lo as i64;
+            (ramp.lo as i64 + span * i64::from(i) / i64::from(n - 1)) as u32
+        };
+        let mut note = if prefix.is_empty() {
+            ramp.label.clone()
+        } else {
+            format!("{} {}", prefix, ramp.label)
+        };
+        if let Some(t) = &tail
+            && !t.is_empty()
+        {
+            note.push(' ');
+            note.push_str(t);
+        }
+        out.push(Step::Timed(TimedStep {
+            duration: Seconds::secs(len),
+            target: Some(Target::Power(watts)),
+            intensity: Intensity::default(),
+            notes: Some(note),
+        }));
+    }
+    out
+}
+
+/// Trailing ramp words in a duration line: the window starting at the
+/// last `from` (`10min from 75 to 70W`, `from 30 to 70% FTP`).
+/// Returns the window as source words (borrowed). `None` = no `from`.
+fn ramp_tail(words: &[String]) -> Option<&[String]> {
+    let pos = words.iter().rposition(|w| w.eq_ignore_ascii_case("from"))?;
+    Some(&words[pos..])
+}
+
+/// Parse trailing ramp words (`from LO to HI`, watts or `%FTP`) into a
+/// [`PowerRamp`]. Endpoints resolve as watts: direct (`75`, `70W`) or
+/// `%FTP` gated on `bike_ftp` (`30%`, `70% FTP`). A bare endpoint takes
+/// the shared unit: `from 75 to 70W` = 75→70 W; `from 30 to 70% FTP` =
+/// 30→70% FTP. `None` = not a ramp (stays notes).
+pub fn parse_power_ramp(words: &[String], duration: Seconds, w: &Workout) -> Option<PowerRamp> {
+    let text = words.join(" ");
+    let low = text.to_ascii_lowercase();
+    let after = low.strip_prefix("from")?.trim();
+    let (lo_txt, hi_txt) = after.split_once(" to ")?;
+    let lo_txt = lo_txt.trim();
+    let hi_txt = hi_txt.trim();
+    if lo_txt.is_empty() || hi_txt.is_empty() {
+        return None;
+    }
+    let ftp_ctx = low.contains("ftp");
+    let lo = ramp_endpoint_watts(lo_txt, hi_txt, ftp_ctx, w);
+    let lo = lo?;
+    let hi = ramp_endpoint_watts(hi_txt, lo_txt, ftp_ctx, w)?;
+    Some(PowerRamp {
+        duration,
+        lo,
+        hi,
+        label: text,
+    })
+}
+
+/// Resolve one ramp endpoint to watts. `%` (or bare-with-`%`-sibling in
+/// `FTP` context) scales `bike_ftp`; otherwise direct watts (bare digits
+/// or a trailing `W`). `None` = unresolvable (caller keeps notes).
+fn ramp_endpoint_watts(txt: &str, other: &str, ftp_ctx: bool, w: &Workout) -> Option<u32> {
+    let compact: String = txt
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let core = compact.strip_suffix("ftp").unwrap_or(&compact);
+    if let Some((pct_txt, _)) = core.split_once('%') {
+        let pct: u32 = pct_txt.parse().ok()?;
+        if pct == 0 {
+            return None;
+        }
+        let ftp = w.bike_ftp?;
+        return Some(ftp * pct / 100);
+    }
+    // Bare number beside a `%` sibling in FTP context shares the `%`
+    // (`from 30 to 70% FTP` = 30% FTP, not 30 W). An explicit `W`
+    // always means watts, even there.
+    if ftp_ctx && other.contains('%') && !core.ends_with('w') {
+        let pct: u32 = core.parse().ok()?;
+        if pct == 0 {
+            return None;
+        }
+        let ftp = w.bike_ftp?;
+        return Some(ftp * pct / 100);
+    }
+    let num = core.strip_suffix('w').unwrap_or(core);
+    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let v: u32 = num.parse().ok()?;
+    if v == 0 { None } else { Some(v) }
+}
+
+/// Wrap expanded steps for a one-line parse result: a leading `N x` count
+/// repeats the whole ramp; no count with one step returns it directly;
+/// no count with many steps wraps a count-1 `Repeat` (flattens to the
+/// steps in order — `parse_step` returns one `Step`).
+fn timed_or_repeat(steps: Vec<Step>, count: Option<u32>) -> Result<Step, Error> {
+    match count {
+        None if steps.len() == 1 => Ok(steps.into_iter().next().expect("ramp expands to ≥1 step")),
+        None => Ok(Step::Repeat(RepeatStep {
+            count: 1,
+            rest_between: None,
+            inner: steps,
+            notes: None,
+        })),
+        Some(c) => Ok(Step::Repeat(RepeatStep {
+            count: c,
+            rest_between: None,
+            inner: steps,
+            notes: None,
+        })),
+    }
+}
+
+/// Append a tail annotation to every expanded step's notes.
+fn attach_tail(mut steps: Vec<Step>, tail: Option<String>) -> Vec<Step> {
+    if let Some(t) = tail
+        && !t.is_empty()
+    {
+        for s in &mut steps {
+            if let Step::Timed(inner) = s {
+                inner.notes = Some(match inner.notes.take() {
+                    Some(prev) => format!("{prev} {t}"),
+                    None => t.clone(),
+                });
+            }
+        }
+    }
+    steps
 }
 
 /// One `@`-target word → [`Target`]. `None` = not a target (stays notes).
@@ -1469,6 +1717,70 @@ mod tests {
     }
 
     #[test]
+    fn power_ramps_expand_per_minute() {
+        use fit_core::Target;
+        let thresholds = Thresholds {
+            run_base: None,
+            bike_ftp: Some(250),
+            race_paces: Default::default(),
+        };
+        let schema = crate::parser::schema::zwift();
+        let parse_ramp = |body: &str| {
+            parse_with_thresholds(body, pool(), None, thresholds.clone(), &schema).unwrap()
+        };
+        // `10min from 75 to 70W`: 10 steps, 75→70 W endpoints, range in notes.
+        let w = parse_ramp("Warm Up\n10min from 75 to 70W\n");
+        let flat = w.flat_steps();
+        assert_eq!(flat.len(), 10);
+        assert_eq!(flat[0].target, Some(Target::Power(75)));
+        assert_eq!(flat[9].target, Some(Target::Power(70)));
+        assert_eq!(flat[0].time, Some(Seconds::minutes(1)));
+        for s in &flat {
+            let notes = s.notes.as_deref().unwrap_or("");
+            assert!(notes.contains("from 75 to 70W"), "{notes:?}");
+        }
+        // `%FTP` endpoints resolve via bike_ftp: 30→70% of 250 = 75→175 W.
+        let w = parse_ramp("Warm Up\n5min from 30 to 70% FTP\n");
+        let flat = w.flat_steps();
+        assert_eq!(flat.len(), 5);
+        assert_eq!(flat[0].target, Some(Target::Power(75)));
+        assert_eq!(flat[4].target, Some(Target::Power(175)));
+        // Midpoints interpolate: 3min 100→200W gives 100/150/200.
+        let w = parse_ramp("Warm Up\n3min from 100 to 200W\n");
+        let flat = w.flat_steps();
+        assert_eq!(
+            flat.iter().map(|s| s.target).collect::<Vec<_>>(),
+            vec![
+                Some(Target::Power(100)),
+                Some(Target::Power(150)),
+                Some(Target::Power(200)),
+            ]
+        );
+        // Sub-minute remainder: 90s → 60s + 30s.
+        let w = parse_ramp("Warm Up\n1:30 from 100 to 200W\n");
+        let flat = w.flat_steps();
+        assert_eq!(
+            flat.iter().map(|s| s.time).collect::<Vec<_>>(),
+            vec![Some(Seconds::secs(60)), Some(Seconds::secs(30))]
+        );
+        // `@`-side ramp: `20min @ from 30 to 70% FTP`.
+        let w = parse_ramp("Warm Up\n20min @ from 30 to 70% FTP\n");
+        let flat = w.flat_steps();
+        assert_eq!(flat.len(), 20);
+        assert_eq!(flat[0].target, Some(Target::Power(75)));
+        assert_eq!(flat[19].target, Some(Target::Power(175)));
+        // Ungated `%FTP` (no --ftp) stays one notes step, not a ramp.
+        let w =
+            parse_with_schema("Warm Up\n5min from 30 to 70% FTP\n", pool(), None, &schema).unwrap();
+        let flat = w.flat_steps();
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].target, None);
+        // Non-ramps untouched: steady `@ 110% FTP` is still one step.
+        let w = parse_ramp("Warm Up\n20min @ 110% FTP\n");
+        assert_eq!(w.flat_steps().len(), 1);
+    }
+
+    #[test]
     fn leading_prose_with_no_step_is_dropped() {
         let w = parse("today: legs\n100\n", pool(), None).expect("parses");
         assert_eq!(w.sections.len(), 1);
@@ -1509,7 +1821,7 @@ mod tests {
         )
         .expect("parses");
         let flat = w.flat_steps();
-        assert_eq!(flat.len(), 6);
+        assert_eq!(flat.len(), 5 + 10);
         // 110% of 250 W = 275 W.
         assert_eq!(flat[0].target, Some(Target::Power(275)));
         // 85% effort on 5:00/km → 300/0.85 = 352 s/km.
@@ -1520,10 +1832,13 @@ mod tests {
         assert_eq!(flat[2].target, Some(Target::Power(250)));
         assert_eq!(flat[3].target, Some(Target::HrZone(4)));
         assert_eq!(flat[4].target, Some(Target::Cadence(95)));
-        // Ramps stay notes (no single target).
-        assert_eq!(flat[5].target, None);
+        // `10min from 75 to 70W` expands: 10 steps, 75→70 W, range in notes.
+        let ramp = &flat[5..];
+        assert_eq!(ramp.len(), 10);
+        assert_eq!(ramp[0].target, Some(Target::Power(75)));
+        assert_eq!(ramp[9].target, Some(Target::Power(70)));
         assert!(
-            flat[5].notes.as_deref().unwrap_or("").contains("75"),
+            ramp[0].notes.as_deref().unwrap_or("").contains("75"),
             "{flat:?}"
         );
         // Distance lines carry targets too (`800 m @ 85% of 1mi pace`).

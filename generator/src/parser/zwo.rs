@@ -15,11 +15,11 @@
 //! Element map (only what the IDL needs; the rest is ignored):
 //! `Warmup`/`Cooldown`/`SteadyState`/`FreeRide` → one `TimedStep`
 //! (label in notes); `IntervalsT` → `RepeatStep` (`Repeat` × [on, off]);
-//! `Ramp` → one `TimedStep` (range in notes — steady target
-//! at the midpoint); `Power`/`PowerLow/High` (FTP fractions × `ftp`,
-//! default 250 W) → `Target::Power`; `Cadence` → `Target::Cadence`
-//! (power wins when both present — same last-wins as text targets).
-//! `sportType="run"` → [`Sport::Run`](fit_core::Sport), else Bike.
+//! `Ramp` → per-minute `TimedStep`s via [`expand_ramp`](super::swimdojo::expand_ramp)
+//! (interpolated watts; range in each step's notes);
+//! `Power`/`PowerLow/High` (FTP fractions × `ftp`, default 250 W) →
+//! `Target::Power`; `Cadence` → `Target::Cadence` (power wins when both
+//! present — same last-wins as text targets). `sportType="run"` → [`Sport::Run`](fit_core::Sport), else Bike.
 //! `FreeRide` with no power → target `None` (open).
 
 use fit_core::{Intensity, Section, SectionLabel, Sport, Step, Target, TimedStep, Workout};
@@ -140,7 +140,7 @@ fn handle_element(
         })
     };
     match name {
-        "Warmup" | "Cooldown" | "SteadyState" | "FreeRide" | "Ramp" => {
+        "Warmup" | "Cooldown" | "SteadyState" | "FreeRide" => {
             let secs = duration()?;
             let power = power_of(attr("Power")).or_else(|| {
                 let (lo, hi) = (power_of(attr("PowerLow")), power_of(attr("PowerHigh")));
@@ -156,8 +156,9 @@ fn handle_element(
             } else {
                 format!("{name} (open)")
             };
-            // Ramps note their range; target holds the midpoint.
-            let notes = if name == "Ramp" || name == "Warmup" || name == "Cooldown" {
+            // Warmup/Cooldown note their range; target holds the midpoint
+            // (ramps below expand instead — this arm is steady-state only).
+            let notes = if name == "Warmup" || name == "Cooldown" {
                 let (lo, hi) = (power_of(attr("PowerLow")), power_of(attr("PowerHigh")));
                 match (lo, hi, power) {
                     (Some(l), Some(h), Some(_)) if l != h => {
@@ -169,6 +170,33 @@ fn handle_element(
                 label
             };
             section.steps.push(timed(secs, power, cadence_of(), notes));
+        }
+        "Ramp" => {
+            let secs = duration()?;
+            let (lo, hi) = (power_of(attr("PowerLow")), power_of(attr("PowerHigh")));
+            match (lo, hi) {
+                (Some(l), Some(h)) => {
+                    let ramp = super::swimdojo::PowerRamp {
+                        duration: fit_core::Seconds::secs(secs),
+                        lo: l.min(h),
+                        hi: l.max(h),
+                        label: format!("ramp {l}-{h}W"),
+                    };
+                    section
+                        .steps
+                        .extend(super::swimdojo::expand_ramp(&ramp, String::new(), None));
+                }
+                // Degenerate ramp (one/no bound) = steady step at the bound.
+                _ => {
+                    let power = power_of(attr("Power")).or(lo).or(hi);
+                    let label = if power.is_some() {
+                        "ramp".to_owned()
+                    } else {
+                        "Ramp (open)".to_owned()
+                    };
+                    section.steps.push(timed(secs, power, cadence_of(), label));
+                }
+            }
         }
         "IntervalsT" => {
             let repeat: u32 = attr("Repeat").and_then(|v| v.parse().ok()).unwrap_or(1);
@@ -268,6 +296,32 @@ mod tests {
         assert!(!flat.is_empty());
         // 0.65 × 250 = 162.5 → 163 W (round, not truncate).
         assert_eq!(flat[0].target, Some(Target::Power(163)));
+    }
+
+    #[test]
+    fn ramp_expands_per_minute() {
+        let xml = r#"<workout_file><name>Ramp Test</name><workout>
+            <Ramp Duration="180" PowerLow="0.4" PowerHigh="0.8"/>
+        </workout></workout_file>"#;
+        let w = parse_zwo(xml, Some(250)).unwrap();
+        let flat = w.flat_steps();
+        // 3min 100→200 W: 100/150/200, range in each step's notes.
+        assert_eq!(flat.len(), 3);
+        assert_eq!(flat[0].target, Some(Target::Power(100)));
+        assert_eq!(flat[1].target, Some(Target::Power(150)));
+        assert_eq!(flat[2].target, Some(Target::Power(200)));
+        for s in &flat {
+            let notes = s.notes.as_deref().unwrap_or("");
+            assert!(notes.contains("100-200W"), "{notes:?}");
+        }
+        // Degenerate ramp (single bound) stays one steady step.
+        let xml = r#"<workout_file><name>Half Ramp</name><workout>
+            <Ramp Duration="120" PowerLow="0.5"/>
+        </workout></workout_file>"#;
+        let w = parse_zwo(xml, Some(250)).unwrap();
+        let flat = w.flat_steps();
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].target, Some(Target::Power(125)));
     }
 
     #[test]
