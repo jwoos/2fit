@@ -310,6 +310,35 @@ fn parse_step(w: &Workout, line: &str, n: usize, schema: &FormatSchema) -> Resul
     // Higdon evidence (effort lives in prose, not the cell).
     if let Some(duration) = leading_duration(first, &mut toks) {
         let rest: Vec<&str> = toks.collect();
+        // `@` after a *duration* is a target/note (`1min @ 85rpm, 100W`),
+        // never a swim interval — route it straight to notes so
+        // `parse_interval` can't misread `85rpm` as a `b`-style base
+        // (`take_time_prefix("85rpm")` yields 85 + tail `rpm`).
+        if interval_text.is_some_and(|t| !t.is_empty()) {
+            let mut words: Vec<&str> = rest
+                .iter()
+                .filter(|t| !is_run_filler(&t.to_ascii_lowercase()))
+                .copied()
+                .collect();
+            let note = format!("@ {}", interval_text.unwrap_or("").trim());
+            words.push(Box::leak(note.into_boxed_str()));
+            let notes = join_notes(words, None, tail_annotation);
+            let inner = Step::Timed(TimedStep {
+                duration,
+                target: None,
+                intensity: Default::default(),
+                notes,
+            });
+            return match count {
+                None => Ok(inner),
+                Some(c) => Ok(Step::Repeat(RepeatStep {
+                    count: c,
+                    rest_between: None,
+                    inner: vec![inner],
+                    notes: None,
+                })),
+            };
+        }
         let (interval, interval_note) = parse_interval(interval_text, n, line, schema)?;
         let mut notes = join_notes(
             rest.iter()
