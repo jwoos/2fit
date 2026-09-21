@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
-use fit_core::{Pool, Seconds, Sport, Unit};
+use fit_core::{Pool, Seconds, Sport, SubSport, Unit, Workout};
 use fit_generator::fit;
 
 /// Target sport (selects FIT sport/sub-sport; run/bike omit the pool).
@@ -30,6 +30,55 @@ impl SportKind {
     }
 }
 
+/// `--sub-sport` presets (each maps to one [`SubSport`]; cross-sport use
+/// falls back to the per-sport default in `effective_sub_sport`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum SubSportKind {
+    /// Pool lanes (swim default).
+    LapSwim,
+    /// Open water.
+    OpenWater,
+    /// Outdoor road/street running (run default).
+    Street,
+    /// Trail running / mountain biking.
+    Trail,
+    /// Track running.
+    Track,
+    /// Velodrome.
+    TrackCycling,
+    /// Treadmill running.
+    Treadmill,
+    /// Indoor running (alias).
+    IndoorRun,
+    /// Outdoor road cycling (bike default).
+    Road,
+    /// Mountain biking (alias).
+    Mtb,
+    /// Indoor cycling.
+    Indoor,
+    /// Indoor cycling (alias).
+    IndoorBike,
+    /// No setting (encodes GENERIC).
+    Generic,
+}
+
+impl SubSportKind {
+    fn as_sub_sport(self) -> SubSport {
+        match self {
+            SubSportKind::LapSwim => SubSport::LapSwim,
+            SubSportKind::OpenWater => SubSport::OpenWater,
+            SubSportKind::Street => SubSport::Street,
+            SubSportKind::Trail | SubSportKind::Mtb => SubSport::Trail,
+            SubSportKind::Track => SubSport::Track,
+            SubSportKind::TrackCycling => SubSport::Track,
+            SubSportKind::Treadmill | SubSportKind::IndoorRun => SubSport::IndoorRun,
+            SubSportKind::Road => SubSport::Road,
+            SubSportKind::Indoor | SubSportKind::IndoorBike => SubSport::IndoorBike,
+            SubSportKind::Generic => SubSport::Generic,
+        }
+    }
+}
+
 /// Parse swimdojo workout notation into a .fit file.
 #[derive(Debug, Parser)]
 #[command(name = "2fit-gen", version)]
@@ -45,6 +94,14 @@ struct Args {
     /// Target sport (default `swim`).
     #[arg(long, value_enum, default_value = "swim")]
     sport: SportKind,
+
+    /// Where/how the workout is done: `lap-swim`, `open-water` (swim);
+    /// `street` (run default), `trail`, `track`, `treadmill`/`indoor-run`
+    /// (run); `road` (bike default), `mtb`/`trail`, `track-cycling`,
+    /// `indoor`/`indoor-bike` (bike). Cross-sport values fall back to the
+    /// per-sport default rather than encoding wrong.
+    #[arg(long, value_enum)]
+    sub_sport: Option<SubSportKind>,
 
     /// Pool length, e.g. `25yd` or `50m` (default `25yd`; swim-only).
     #[arg(long)]
@@ -71,6 +128,10 @@ fn main() -> Result<()> {
     let mut workout = fit_generator::parse_with_schema(&text, pool, base, &schema)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     workout.sport = args.sport.as_sport();
+    workout.sub_sport = match args.sub_sport {
+        Some(s) => s.as_sub_sport(),
+        None => Workout::default_sub_sport(workout.sport),
+    };
     if !matches!(args.sport, SportKind::Swim) {
         workout.pool = None;
     }
@@ -269,6 +330,15 @@ mod tests {
             "higdon-run"
         );
         assert!(resolve_schema(Some("/nonexistent.json"), SportKind::Swim).is_err());
+    }
+
+    #[test]
+    fn sub_sport_kinds_map() {
+        assert_eq!(SubSportKind::Street.as_sub_sport(), SubSport::Street);
+        assert_eq!(SubSportKind::Treadmill.as_sub_sport(), SubSport::IndoorRun);
+        assert_eq!(SubSportKind::Indoor.as_sub_sport(), SubSport::IndoorBike);
+        assert_eq!(SubSportKind::Mtb.as_sub_sport(), SubSport::Trail);
+        assert_eq!(SubSportKind::Road.as_sub_sport(), SubSport::Road);
     }
 
     #[test]

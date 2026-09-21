@@ -18,7 +18,7 @@
 use std::io::Cursor;
 
 use embedded_io_adapters::std::FromStd;
-use fit_core::{FlatStep, Intensity, Sport, Stroke, Target, Unit, Workout};
+use fit_core::{FlatStep, Intensity, Sport, Stroke, SubSport, Target, Unit, Workout};
 use rustyfit::{
     Encoder,
     profile::{mesgdef, typedef},
@@ -62,7 +62,7 @@ fn file_id() -> mesgdef::FileId {
 fn workout_message(workout: &Workout, num_steps: usize) -> mesgdef::Workout {
     let mut m = mesgdef::Workout::new();
     m.sport = sport(workout.sport);
-    m.sub_sport = sub_sport(workout.sport);
+    m.sub_sport = sub_sport(workout);
     m.num_valid_steps = num_steps as u16;
     m.wkt_name = fit_str(&workout.name.clone().unwrap_or_default());
     m.wkt_description = fit_str(&workout.description.clone().unwrap_or_default());
@@ -86,11 +86,19 @@ fn sport(sport: Sport) -> typedef::Sport {
     }
 }
 
-fn sub_sport(sport: Sport) -> typedef::SubSport {
-    match sport {
-        Sport::Swim => typedef::SubSport::LAP_SWIMMING,
-        Sport::Run => typedef::SubSport::STREET,
-        Sport::Bike => typedef::SubSport::ROAD,
+fn sub_sport(workout: &Workout) -> typedef::SubSport {
+    match workout.effective_sub_sport() {
+        SubSport::LapSwim => typedef::SubSport::LAP_SWIMMING,
+        SubSport::OpenWater => typedef::SubSport::OPEN_WATER,
+        SubSport::Street => typedef::SubSport::STREET,
+        SubSport::Trail if matches!(workout.sport, Sport::Run) => typedef::SubSport::TRAIL,
+        SubSport::Trail => typedef::SubSport::MOUNTAIN,
+        SubSport::Track if matches!(workout.sport, Sport::Run) => typedef::SubSport::TRACK,
+        SubSport::Track => typedef::SubSport::TRACK_CYCLING,
+        SubSport::IndoorRun => typedef::SubSport::INDOOR_RUNNING,
+        SubSport::Road => typedef::SubSport::ROAD,
+        SubSport::IndoorBike => typedef::SubSport::INDOOR_CYCLING,
+        // `Generic`/`Other`/future map to GENERIC (never guess a setting).
         _ => typedef::SubSport::GENERIC,
     }
 }
@@ -420,6 +428,43 @@ mod tests {
             if pool.is_none() {
                 assert_eq!(wm.pool_length, u16::MAX);
             }
+        }
+    }
+
+    #[test]
+    fn sub_sport_overrides_and_fallbacks() {
+        use fit_core::SubSport as S;
+        // (sport, sub_sport, want): cross-sport settings fall back to the
+        // per-sport default; unknown maps to GENERIC.
+        for (sport, sub, want) in [
+            (Sport::Run, S::Trail, typedef::SubSport::TRAIL),
+            (Sport::Run, S::Track, typedef::SubSport::TRACK),
+            (Sport::Run, S::IndoorRun, typedef::SubSport::INDOOR_RUNNING),
+            (Sport::Bike, S::Trail, typedef::SubSport::MOUNTAIN),
+            (
+                Sport::Bike,
+                S::IndoorBike,
+                typedef::SubSport::INDOOR_CYCLING,
+            ),
+            (Sport::Swim, S::OpenWater, typedef::SubSport::OPEN_WATER),
+            (Sport::Run, S::Road, typedef::SubSport::STREET),
+            (Sport::Bike, S::Street, typedef::SubSport::ROAD),
+            (Sport::Swim, S::Street, typedef::SubSport::LAP_SWIMMING),
+            (Sport::Run, S::Generic, typedef::SubSport::STREET),
+            (Sport::Bike, S::Other, typedef::SubSport::ROAD),
+        ] {
+            let mut w = Workout::for_sport(sport);
+            w.sub_sport = sub;
+            w.sections.push(Section {
+                label: SectionLabel::None,
+                steps: vec![Step::Rest {
+                    secs: Seconds::secs(30),
+                }],
+                subtotal: None,
+            });
+            let fit = decode(&to_fit(&w).unwrap());
+            let wm = mesgdef::Workout::from(&fit.messages[1]);
+            assert_eq!(wm.sub_sport, want, "{sport:?}/{sub:?}");
         }
     }
 

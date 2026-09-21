@@ -227,6 +227,38 @@ pub enum Sport {
     Bike,
 }
 
+// Evidence: rustyfit 0.10.2 `profile/typedef/sub_sport.rs` (STREET=2,
+// TRAIL=3, TRACK=4, ROAD=7, MOUNTAIN=8, INDOOR_CYCLING=6,
+// INDOOR_RUNNING=45, LAP_SWIMMING=17, OPEN_WATER=18) — only the values the
+// encoder maps are variants; anything else stays `Other` (omitted).
+
+/// Where/how a workout is done, within its [`Sport`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum SubSport {
+    /// No setting (`SubSport::GENERIC` on the wire).
+    #[default]
+    Generic,
+    /// Pool lanes.
+    LapSwim,
+    /// Open water.
+    OpenWater,
+    /// Outdoor road/street running (run default).
+    Street,
+    /// Trail running / mountain biking.
+    Trail,
+    /// Track running / velodrome.
+    Track,
+    /// Treadmill / indoor running.
+    IndoorRun,
+    /// Outdoor road cycling (bike default).
+    Road,
+    /// Indoor cycling.
+    IndoorBike,
+    /// Unmapped setting (encodes as `GENERIC`, not guessed).
+    Other,
+}
+
 // --- Pool -------------------------------------------------------------------
 
 /// The pool a workout is swum in. Pools in the US are generally 25-yd or
@@ -837,6 +869,10 @@ pub struct Workout {
     /// The sport the workout is for (default [`Sport::Swim`]).
     #[serde(default)]
     pub sport: Sport,
+    /// Where/how the workout is done (defaults: pool→`LapSwim`,
+    /// run→`Street`, bike→`Road`; see [`Workout::sub_sport`]).
+    #[serde(default)]
+    pub sub_sport: SubSport,
     /// The pool the workout is written for. `None` for run/bike workouts
     /// (the encoder omits `pool_length`; rustyfit leaves it at its
     /// invalid-sentinel default `u16::MAX`, which encodes as absent).
@@ -878,6 +914,7 @@ impl Workout {
             name: None,
             description: None,
             sport: Sport::Swim,
+            sub_sport: SubSport::LapSwim,
             pool: Some(pool),
             base100: None,
             sections: Vec::new(),
@@ -888,13 +925,50 @@ impl Workout {
     /// workouts should use [`Workout::new`] (which sets the pool); run/bike
     /// workouts use this (`pool: None`).
     pub fn for_sport(sport: Sport) -> Self {
+        let sub_sport = match sport {
+            Sport::Swim => SubSport::LapSwim,
+            Sport::Run => SubSport::Street,
+            Sport::Bike => SubSport::Road,
+        };
         Self {
             name: None,
             description: None,
             sport,
+            sub_sport,
             pool: None,
             base100: None,
             sections: Vec::new(),
+        }
+    }
+
+    /// The wire sub-sport: `sub_sport` when it belongs to `sport`, else the
+    /// per-sport default (a future `SubSport` variant the match below
+    /// doesn't know stays `Generic` rather than encoding wrong).
+    pub fn effective_sub_sport(&self) -> SubSport {
+        let ok = match self.sport {
+            Sport::Swim => matches!(self.sub_sport, SubSport::LapSwim | SubSport::OpenWater),
+            Sport::Run => matches!(
+                self.sub_sport,
+                SubSport::Street | SubSport::Trail | SubSport::Track | SubSport::IndoorRun
+            ),
+            Sport::Bike => matches!(
+                self.sub_sport,
+                SubSport::Road | SubSport::Trail | SubSport::Track | SubSport::IndoorBike
+            ),
+        };
+        if ok {
+            self.sub_sport
+        } else {
+            Self::default_sub_sport(self.sport)
+        }
+    }
+
+    /// The per-sport default sub-sport.
+    pub fn default_sub_sport(sport: Sport) -> SubSport {
+        match sport {
+            Sport::Swim => SubSport::LapSwim,
+            Sport::Run => SubSport::Street,
+            Sport::Bike => SubSport::Road,
         }
     }
 
