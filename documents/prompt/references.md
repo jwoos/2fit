@@ -11,3 +11,4 @@
 - documents/run-bike-notation.md — run/bike survey (Higdon evidence) + verified FIT run/bike facts
 - documents/myswimpro.md — myswimpro site mechanics, divergences, parser changes, inference report
 - Hal Higdon Novice 1: https://www.halhigdon.com/training-programs/marathon-training/novice-1-marathon/ — run line shapes (`3 mi run`, bare long runs, Rest/Cross markers)
+- documents/higdon.md — Higdon grid mechanics, normalization, inference + CLI evidence

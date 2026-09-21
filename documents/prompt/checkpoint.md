@@ -1,33 +1,35 @@
-# Checkpoint (2026-09-21) — Turn 13: Phase 3 parser + schemas done; NEXT: Phase 4 scraper + CLI polish
+# Checkpoint (2026-09-21) — Turn 14: Phase 4 scraper + CLI done; NEXT: user review
 
-## Done — 4 atomic commits (all green: 68 tests, clippy + fmt clean)
+## Done — 2 atomic commits (all green: 79 tests, clippy + fmt clean)
 
-- **`5f2dcb7` explicit units + durations**: `suffixed_distance()` (unit beats
-  pool: `3 mi`, `4.8 km`→4800 m, `5km`/`5k`/`400m`, `400 5K pace`→400 m),
-  `Distance::{from_km_decimal, from_miles_decimal}` (integer-only;
-  `3.5 mi`→5633 m), `leading_duration()` (`35 min tempo`, `30:00 easy` →
-  `Step::Timed`, target `None`), `@`-after-run-distance kept as note
-  (`3 mi run @ 8:00` → notes, `interval: None`). 3 parser tests.
-- **`287c047` fixtures parse**: `documents/run-fixtures/` (3 Higdon weeks +
-  Zwift best-mile) + `documents/bike-fixtures/` (Zwift ramp excerpt);
-  spaceless `5min`/`1min` durations; all 5 fixtures `2fit-gen --sport run` OK.
-- **`f5f36f8` schemas**: `schema::higdon_run()` + `schema::zwift()` (vocabulary
-  only — no new `FormatSchema` fields); fixture tests per schema; real bug
-  fixed: `@ 85rpm` after a duration misread as swim base (`85` + `rpm` tail)
-  → `@`-after-duration now routes straight to notes.
-- **`6ef165f` infer**: run/bike filler (`run`, `tempo`, `fast`, `ride`,
-  `walk`, `jog`, `cross`, `cooldown`) votes `freestyle_words`; swim-only
-  tables honestly gap on run samples; `infers_run_filler_as_freestyle` test.
-- Interval-style evidence now fetched (Higdon 10K Intermediate grid + Zwift
-  FTP/101-Running via whatsonzwift; `run-bike-notation.md` §2 rewritten):
-  `%FTP`/`%pace`/named pace/watts stay **notes** (need athlete thresholds;
-  `run_base`/`bike_ftp` still deferred).
+- **`2843160` Higdon scraper**: `site::Higdon` (plain-HTML `table.tablesaw`
+  grids: miles table wins, km second; `Week N` + bare cells + `—>Rest days:`
+  annotations, no day prefixes — parser has no day model; `normalize_cell`
+  `6`→`6 mi`; `is_day_marker` Rest/Cross/race names). `list` seeds from
+  Novice 1's 14 program links (no server search; tag/query client-side);
+  `fetch` parses any plan URL. Offline fixture
+  `scraper/tests/data/higdon-novice1.html` (118951 B saved page) + 4 tests
+  incl. whole-plan parse via `higdon_run`. Live verified: `list --limit 3`,
+  `fetch novice-1` → pipe → `2fit-gen --sport run` → 2546 B `.fit`.
+  Wired as `2fit-scrape --site higdon`.
+- **`82f550c` `--format` presets**: JSON path or preset name (`swimdojo`,
+  `myswimpro`, `higdon-run|higdon|run`, `zwift|bike`); default follows
+  `--sport` (swim→swimdojo, run→higdon-run, bike→zwift).
+  `resolve_schema()` + `schema_resolution` test; live smoke all 3 defaults.
 
-## NEXT: Phase 4 — Scraper + CLI (planned, no code)
+## State of multisport (Phases 0–4 complete)
 
-- New `Site` impls per sport (Higdon grid? Zwift/whatsonzwift excerpts?
-  sources TBD — Phase 3 used hand-normalized cells, no scraper yet);
-  `2fit-gen --sport` exists (Phase 2); `--base` generalized to pace/FTP
-  when a parser emits `Target` (deferred — targets are notes today).
-- `parse_with_schema` unchanged (schema-driven parsing held: run/bike are
-  new `FormatSchema` values, not a new parser).
+- Phase 0 survey → `run-bike-notation.md` (Higdon + Zwift evidence).
+- Phase 1 IDL → `Sport`, optional pool, km/mi, `Target`/`Pace`,
+  `Step::Timed`, `FlatStep.target` (+ `idl.md` FIT mapping).
+- Phase 2 CLI sport + per-sport round-trips.
+- Phase 3 parser units/durations + `higdon_run`/`zwift` schemas + fixtures
+  + infer filler; `%FTP`/`%pace`/named pace stay notes (thresholds deferred).
+- Phase 4 Higdon scraper + format presets (this turn).
+
+## NEXT (deferred, needs user direction)
+
+- More run/bike sources (Zwift/whatsonzwift scraper? TrainingPeaks?
+  manana — Phase 3/4 used hand excerpts, no bike scraper yet).
+- `run_base`/`bike_ftp` + `Target` resolution (today targets are notes).
+- INDOOR_* / TRAIL / TRACK sub-sports (today STREET/ROAD).

@@ -4,6 +4,7 @@
 - [x] Multisport Phase 1: core IDL (`Sport`, optional pool, km/mi units, `Target`/`Pace`, `Step::Timed`, `FlatStep.target`)
 - [x] Multisport Phase 2: `2fit-gen --sport` + per-sport round-trip tests
 - [x] Multisport Phase 3: parser run/bike units + durations; `higdon_run`/`zwift` schemas + fixtures; infer filler
+- [x] Multisport Phase 4: Higdon grid scraper + `--format` presets/defaults
 
 - [x] Research swimdojo layout + notation grammar; extract grammar → documents/swimdojo-grammar.txt (was /tmp/sd-howto.txt, now persisted)
 - [x] Evaluate FIT crates (rustyfit vs fit-sdk-rust) → choose rustyfit v0.10.2
