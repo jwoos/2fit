@@ -318,6 +318,13 @@ fn observe_interval_markers(
 /// Observe a digit-led step line: stroke/drill words, interval markers,
 /// rest and recovery words — mirroring the parser's own classifiers.
 ///
+/// Run/bike lines (`3 mi run`, `35 min tempo`, `5min free ride`) vote for
+/// the freestyle table via the run/bike filler words (`run`, `tempo`,
+/// `fast`, `free`, `ride`, `walk`, `jog`, `cross`, …): those are the
+/// format's "no stroke, no target" markers, exactly what freestyle words
+/// mean to the parser. Unknown words stay unclassified (the site under
+/// inference is a swim site until proven otherwise).
+///
 /// Annotation lines (`—>…`, e.g. Box Crab's `—>#1-3 kick @ kb`) carry
 /// intervals too, so the `@` half is always scanned even when the left
 /// half has no digit-led step.
@@ -449,7 +456,24 @@ fn observe_words(
         ("imedley", Stroke::IM),
         ("stroke", Stroke::Any),
     ];
-    const KNOWN_FREESTYLE: [&str; 3] = ["free", "freestyle", "swim"];
+    const KNOWN_FREESTYLE: [&str; 12] = [
+        "free",
+        "freestyle",
+        "swim",
+        // Run/bike filler: the format's "swim freestyle" (no stroke, no
+        // target). Evidenced by Higdon cells (`3 mi run`, `30 min tempo`,
+        // `3 mi fast`) + Zwift excerpts (`5min free ride`, `400 m Walk`,
+        // `800 m Jog`, `60 min cross`).
+        "run",
+        "runs",
+        "tempo",
+        "fast",
+        "ride",
+        "walk",
+        "jog",
+        "cross",
+        "cooldown",
+    ];
     const KNOWN_DRILLS: [&str; 6] = ["bob", "bobs", "scull", "sculls", "drill", "drills"];
     for w in words {
         if let Some((_, s)) = KNOWN_STROKES.iter().find(|(k, _)| k == w) {
@@ -527,6 +551,31 @@ mod tests {
             )
             .unwrap();
             assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn infers_run_filler_as_freestyle() {
+        let inf = infer_texts(
+            "higdon",
+            &["Warm Up\n3 mi run\n4.8 km run\n8 x 400 5K pace\n35 min tempo\n60 min cross\n"],
+        );
+        // `run`/`tempo`/`cross` vote freestyle (the run "no target" marker);
+        // pace/interval words (`pace`, `5k`) are not vocabulary — they stay
+        // out of the tables rather than polluting them.
+        assert!(inf.schema.is_freestyle("run"));
+        assert!(inf.schema.is_freestyle("tempo"));
+        assert!(inf.schema.is_freestyle("cross"));
+        assert!(!inf.schema.is_freestyle("pace"));
+        // Swim-only tables honestly report no evidence on run samples.
+        for gap in [
+            "strokes",
+            "drill_words",
+            "clock_prefix",
+            "rest_words",
+            "base_marker",
+        ] {
+            assert!(inf.gaps.contains(&gap.to_owned()), "gaps: {:?}", inf.gaps);
         }
     }
 
