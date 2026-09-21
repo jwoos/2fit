@@ -651,14 +651,26 @@ fn is_run_filler(word: &str) -> bool {
     matches!(word, "run" | "runs" | "cross" | "x-train" | "xtrain")
 }
 
-/// A leading time token: `<N> min|mins|minute|minutes` (consumes the unit
-/// word from `toks`) or bare `m:ss` / `h:mm:ss`. Returns the duration.
+/// A leading time token: `<N> min|mins|minute|minutes` or spaceless `<N>min`
+/// (consumes the unit word from `toks` when separate) or bare `m:ss` /
+/// `h:mm:ss`. Returns the duration.
 /// Evidence: Higdon 10K Intermediate cells (`35 min tempo run`,
-/// `60 min cross`, `8 x 400 5K pace` is the distance sibling).
+/// `60 min cross`, `8 x 400 5K pace` is the distance sibling); Zwift
+/// bike cells (`5min free ride`, `1min @ 85rpm, 100W` — spaceless).
 fn leading_duration<'a>(
     first: &str,
     toks: &mut (impl Iterator<Item = &'a str> + Clone),
 ) -> Option<Seconds> {
+    // Spaceless `<N>min...` (`5min`, `1min` — Zwift): the unit is attached.
+    let low_first = first.to_ascii_lowercase();
+    for suffix in ["minutes", "minute", "mins", "min"] {
+        if let Some(num) = low_first.strip_suffix(suffix)
+            && !num.is_empty()
+            && let Some(mins) = numeric(num)
+        {
+            return Some(Seconds::minutes(mins));
+        }
+    }
     if let Some(mins) = numeric(first) {
         // Peek the unit without consuming on mismatch: collect is avoided
         // by cloning the iterator (slice-backed, cheap).
@@ -706,7 +718,9 @@ fn time_token(tok: &str) -> Option<Seconds> {
 /// unit word when present. Returns the distance in its own unit (pool is
 /// ignored — the unit beats the pool):
 ///
-/// - `3 mi [run]` → miles; `4.8 km [run]` → decimal km → whole meters;
+/// - `3 mi [run]` / `3.5 mi [run]` → miles (decimal miles → whole meters
+///   via 1 mi = 1609.344 m, integer round — Higdon's `3.5 mi` Tuesday runs);
+///   `4.8 km [run]` → decimal km → whole meters;
 ///   `400 [5K pace]` / `5 x 400` → bare meters (track reps);
 /// - `N` + `m|meter|meters` → meters; `N` + `km|kilometer(s)` → km→m;
 ///   `N` + `mi|mile(s)` → miles.
@@ -776,9 +790,8 @@ fn suffixed_distance<'a>(
     let unit_word = peek.next()?.to_ascii_lowercase();
     match unit_word.as_str() {
         "mi" | "mile" | "miles" => {
-            let value = numeric(first)?;
             let _ = toks.next();
-            Some(Distance::miles(value))
+            Distance::from_miles_decimal(first)
         }
         "km" | "kilometer" | "kilometers" | "k" => {
             let _ = toks.next();
@@ -1262,6 +1275,7 @@ mod tests {
             ("5k\n", Distance::meters(5000)),
             ("400m\n", Distance::meters(400)),
             ("3 miles\n", Distance::miles(3)),
+            ("3.5 mi run\n", Distance::meters(5633)),
             ("11.3 km run\n", Distance::meters(11_300)),
         ] {
             let w = parse(line, pool(), None).expect("parses");

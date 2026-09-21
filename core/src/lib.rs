@@ -94,6 +94,43 @@ impl Distance {
         }
     }
 
+    /// Parse a decimal-miles token (`3.5`) into whole meters.
+    /// 1 mi = 1609.344 m exactly, so 0.1 mi = 160.9344 m — rounded to the
+    /// nearest meter with integer math (no float). Whole miles stay in
+    /// `Miles` (display-preserving); fractional miles become meters.
+    pub fn from_miles_decimal(tok: &str) -> Option<Self> {
+        let (whole, frac) = match tok.split_once('.') {
+            Some((w, f)) => (w, f),
+            None => {
+                let value: u32 = tok.replace(',', "").parse().ok()?;
+                if value == 0 {
+                    return None;
+                }
+                return Some(Self::miles(value));
+            }
+        };
+        if whole.is_empty() || !whole.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        // meters = whole*1609.344 + frac*1609.344/10^len, rounded.
+        // Scale by 10^len with u64: whole ≤ u32::MAX keeps us far from overflow.
+        let whole_mi: u64 = whole.parse().ok()?;
+        if frac.is_empty() || !frac.bytes().all(|b| b.is_ascii_digit()) || frac.len() > 3 {
+            return None;
+        }
+        let scale: u64 = 10u64.pow(frac.len() as u32);
+        let frac_mi: u64 = frac.parse().ok()?;
+        // 1609.344 m/mi = 1609344/1000; total milli-meters then round.
+        let total_milli =
+            whole_mi.checked_mul(1_609_344)? + frac_mi.checked_mul(1_609_344)? / scale;
+        let meters = total_milli.div_ceil(1000);
+        let value: u32 = meters.try_into().ok()?;
+        if value == 0 {
+            return None;
+        }
+        Some(Self::meters(value))
+    }
+
     /// Parse a decimal-kilometers token (`4.8`, `11.3`) into whole meters.
     /// Higdon's metric cells are mile-conversions rounded to 0.1 km, so
     /// 0.1 km = 100 m is exact — no float involved.
