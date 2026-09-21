@@ -1,6 +1,8 @@
 # Tasks
 
 - [x] Multisport Phase 0: survey run/bike notation → documents/run-bike-notation.md; verify FIT run/bike facts in rustyfit source
+- [x] Multisport Phase 1: core IDL (`Sport`, optional pool, km/mi units, `Target`/`Pace`, `Step::Timed`, `FlatStep.target`)
+- [x] Multisport Phase 2: `2fit-gen --sport` + per-sport round-trip tests
 
 - [x] Research swimdojo layout + notation grammar; extract grammar → documents/swimdojo-grammar.txt (was /tmp/sd-howto.txt, now persisted)
 - [x] Evaluate FIT crates (rustyfit vs fit-sdk-rust) → choose rustyfit v0.10.2
