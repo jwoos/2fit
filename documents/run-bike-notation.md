@@ -54,6 +54,25 @@ User asked for a second bike source beyond hand excerpts. Findings:
   `PowerLow/High`, `Cadence`). No new scraper until a licensed,
   fetchable corpus appears. Hand Zwift excerpts stay the text fixtures.
 
+## `.zwo` coaching cues (2026-09-22; closes the `<textevent>` deferral)
+
+`TextEvent`/`textevent` children (`message` + `timeoffset`/`TimeOffset`
+seconds, run `distoffset` meters; `mssage` = Zwift's own typo, read as
+fallback; ref: h4l `zwift-workout-file-reference`, verified 2026-09-22 —
+cue elements nest inside every step element + workout; lowercase
+`timeoffset` dominates 37648 sightings, `distoffset` values are meter
+marks `0/50/100/200/400/800/…`) append to the containing step's notes:
+offset 0 → bare message (`Stay smooth`), deeper → `@M:SS message`
+(`@1:30 Halfway`), run distance → `@Nm message` (`@400m 400m mark`,
+kept verbatim — meters need pace to map to time). Offsets map into
+expansions: the ramp minute-step holding the second (re-clocked to the
+minute, `@0:30 Push`); the intervals rep-phase holding it (`on` vs
+`off`, re-clocked to the phase — shared inner steps, so the cue repeats
+every rep like Zwift shows it). Workout-level cues attach to the step
+holding the absolute offset. Empty messages skipped; cueless files
+byte-identical to before (SST fixture notes unchanged). Live:
+cue-smoke `.zwo` → 246 B `.fit`.
+
 Confirmed against real sites (both fetched live; excerpts in fixtures):
 
 - Higdon Intermediate 10K grid (https://www.halhigdon.com/training-programs/10k-training/intermediate-10k/):
