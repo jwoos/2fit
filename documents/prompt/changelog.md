@@ -1,6 +1,7 @@
 # Changelog
 
-- Turn 18 (2026-09-21): ramp expansion — `beb67e0` (per-minute `PowerRamp` expansion for text + `.zwo` Ramp; `split_count` anchored fix). See checkpoint.md.
+- Turn 19 (2026-09-22): `.zwo` textevent cues — `2d98273` (cue collection + owner-step attach + ramp/interval offset mapping). See checkpoint.md.
+- Turn 18 (2026-09-21): ramp expansion — `beb67e0` (per-minute `PowerRamp` expansion for text + `.zwo` Ramp; `split_count` anchored fix). See changelog detail below.
 - Turn 17 (2026-09-21): named race pace — `3d4ca88` (`Workout.race_paces` + `--race-pace NAME=PACE` + trailing/`@` resolution). See changelog detail below.
 - Turn 16 (2026-09-21): review — `a8726cb` removes `Box::leak` note plumbing (owned `String`s) + true last-wins targets (winner source word not notes). See changelog detail below.
 - Turn 15 (2026-09-21): user decisions 1–4 done (all green: 83 tests, clippy + fmt clean) —

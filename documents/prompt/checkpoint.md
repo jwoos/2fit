@@ -1,22 +1,22 @@
-# Checkpoint (2026-09-21) — Turn 18: ramp expansion; NEXT: user review
+# Checkpoint (2026-09-22) — Turn 19: .zwo textevent cues; NEXT: user review
 
-## Done — 1 commit (green: 87 tests, clippy + fmt clean)
+## Done — 1 commit (green: 88 tests, clippy + fmt clean)
 
-- **`beb67e0` ramp expansion** (user chose per-minute): `PowerRamp`
-  (`duration/lo/hi/label`) + `expand_ramp()` (ceil/60 steps, 60 s first
-  + remainder last, linear watts, range in each step's notes) +
-  `parse_power_ramp()`/`ramp_tail()`/`ramp_endpoint_watts()` (shared-unit
-  endpoints: bare `30` beside `%` in FTP context = 30% FTP; explicit `W`
-  always watts; ungated `%FTP` stays notes). Text: `10min from 75 to
-  70W` → 10 steps, `5min from 30 to 70% FTP` → 75→175 W, `20min @ from
-  30 to 70% FTP` expands on the `@` side. `.zwo` `<Ramp>` → same
-  expansion (`ramp {lo}-{hi}W` notes); degenerate = steady step.
-  Drive-by: `split_count` anchored-at-start (`10min` no longer count
-  `10`). Tests: `power_ramps_expand_per_minute` + `ramp_expands_per_minute`
-  (zwo) + updated `threshold_targets_resolve` (87 total). Live: 467 B
-  / 328 B `.fit` smokes. Docs: `run-bike-notation.md` § Ramp expansion.
+- **`2d98273` textevent cues** (closes last `.zwo` deferral): flat
+  event loop tracks step-nesting frames (Empty + Start/End; cue `Start`
+  treated as attribute-carried); `read_cue()` (`message`/`mssage`,
+  `timeoffset`/`TimeOffset` float secs, run `distoffset` meters);
+  `attach_cues()` (owner = step holding `base+offset`; past-end → last
+  step; bare message at offset 0, `@M:SS` deeper, `@Nm` verbatim for
+  distance); `push_cue()` (deepest expansion holder; intervals phases
+  re-clocked `@1:30`→`@0:30` since inner steps repeat). Found live bug
+  in review: flat loop based cues on step *start* order, so mid-step
+  offsets landed on the wrong step (`@6:30` instead of `@1:30`) —
+  fixed with frames. Tests: `textevents_attach_as_cues` (step/offset/
+  ramp/interval/`TextEvent`+`mssage`+`distoffset`/empty/back-compat —
+  88 total). Live: cue smoke → 246 B `.fit`; SST cueless unchanged.
+  Docs: `run-bike-notation.md` § `.zwo` coaching cues (h4l evidence).
 
 ## Deferred (remaining)
 
-- `FreeRide` open steps (target None — correct), `.zwo` `<textevent>`
-  cues dropped.
+- `FreeRide` open steps (target None — correct by design).
